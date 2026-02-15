@@ -27,6 +27,26 @@ export class ThreeRenderer extends Renderer {
     this.meshes = []; // Array of THREE.Mesh (for areas)
     this.group = new THREE.Group();
     this.scene.add(this.group);
+    
+    // Grid Lines
+    const gridGeo = new THREE.BufferGeometry();
+    const gridPos = new Float32Array(1000 * 3); // Max 500 lines (1000 vertices)
+    gridGeo.setAttribute('position', new THREE.BufferAttribute(gridPos, 3));
+    gridGeo.setDrawRange(0, 0);
+    const gridMat = new THREE.LineBasicMaterial({ color: 0xffffff, opacity: 0.1, transparent: true });
+    this.gridLines = new THREE.LineSegments(gridGeo, gridMat);
+    this.scene.add(this.gridLines);
+    
+    // HTML Overlay for labels
+    this.labelContainer = document.createElement('div');
+    this.labelContainer.style.position = 'absolute';
+    this.labelContainer.style.top = '0';
+    this.labelContainer.style.left = '0';
+    this.labelContainer.style.pointerEvents = 'none';
+    this.labelContainer.style.color = 'rgba(255,255,255,0.7)';
+    this.labelContainer.style.fontSize = '11px';
+    this.labelContainer.style.fontFamily = 'monospace';
+    this.container.appendChild(this.labelContainer);
 
     // Initialize Pool
     // Materials
@@ -141,6 +161,110 @@ export class ThreeRenderer extends Renderer {
       this.camera.top = 2000; 
       this.camera.bottom = -2000;
       this.camera.updateProjectionMatrix();
+  }
+  
+  // Helper: Calculate nice tick values (same as CanvasRenderer)
+  calculateNiceTicks(min, max, targetCount = 8) {
+      const range = max - min;
+      if (range === 0) return [min];
+      
+      const rawStep = range / targetCount;
+      const magnitude = Math.pow(10, Math.floor(Math.log10(rawStep)));
+      const normalized = rawStep / magnitude;
+      
+      let niceStep;
+      if (normalized < 1.5) niceStep = 1;
+      else if (normalized < 3) niceStep = 2;
+      else if (normalized < 7) niceStep = 5;
+      else niceStep = 10;
+      
+      niceStep *= magnitude;
+      
+      const start = Math.ceil(min / niceStep) * niceStep;
+      const ticks = [];
+      for (let val = start; val <= max; val += niceStep) {
+          ticks.push(val);
+      }
+      return ticks;
+  }
+  
+  formatYLabel(value) {
+      const abs = Math.abs(value);
+      if (abs >= 1e6) return (value / 1e6).toFixed(1) + 'M';
+      if (abs >= 1e3) return (value / 1e3).toFixed(1) + 'K';
+      return value.toFixed(0);
+  }
+  
+  updateGrid() {
+      const { start, end } = this.viewport.getRange();
+      const Y_MIN = -2000;
+      const Y_MAX = 2000;
+      
+      const yTicks = this.calculateNiceTicks(Y_MIN, Y_MAX, 8);
+      const xTicks = this.calculateNiceTicks(start, end, 10);
+      
+      // Update grid lines geometry
+      const gridPos = this.gridLines.geometry.attributes.position.array;
+      let ptr = 0;
+      
+      // Y-axis lines (horizontal)
+      for (const yVal of yTicks) {
+          gridPos[ptr++] = start; gridPos[ptr++] = yVal; gridPos[ptr++] = 0;
+          gridPos[ptr++] = end; gridPos[ptr++] = yVal; gridPos[ptr++] = 0;
+      }
+      
+      // X-axis lines (vertical)
+      for (const xVal of xTicks) {
+          gridPos[ptr++] = xVal; gridPos[ptr++] = Y_MIN; gridPos[ptr++] = 0;
+          gridPos[ptr++] = xVal; gridPos[ptr++] = Y_MAX; gridPos[ptr++] = 0;
+      }
+      
+      this.gridLines.geometry.attributes.position.needsUpdate = true;
+      this.gridLines.geometry.setDrawRange(0, ptr / 3);
+      
+      // Update HTML labels
+      this.labelContainer.innerHTML = '';
+      
+      // Y-axis labels
+      for (const yVal of yTicks) {
+          const ndc = this.worldToScreen(start, yVal);
+          if (!ndc) continue;
+          
+          const label = document.createElement('div');
+          label.style.position = 'absolute';
+          label.style.left = '5px';
+          label.style.top = ndc.y + 'px';
+          label.textContent = this.formatYLabel(yVal);
+          this.labelContainer.appendChild(label);
+      }
+      
+      // X-axis labels
+      for (const xVal of xTicks) {
+          const ndc = this.worldToScreen(xVal, Y_MIN);
+          if (!ndc) continue;
+          
+          const label = document.createElement('div');
+          label.style.position = 'absolute';
+          label.style.left = ndc.x + 'px';
+          label.style.top = (this.height - 15) + 'px';
+          label.textContent = Math.floor(xVal).toString();
+          this.labelContainer.appendChild(label);
+      }
+  }
+  
+  // Convert world coords to screen pixels
+  worldToScreen(x, y) {
+      const vec = new THREE.Vector3(x, y, 0);
+      vec.project(this.camera);
+      
+      const screenX = (vec.x + 1) / 2 * this.width;
+      const screenY = (-vec.y + 1) / 2 * this.height;
+      
+      if (screenX < 0 || screenX > this.width || screenY < 0 || screenY > this.height) {
+          return null;
+      }
+      
+      return { x: screenX, y: screenY };
   }
 
   setData(dataChunk) {
@@ -283,6 +407,7 @@ export class ThreeRenderer extends Renderer {
   render() {
       // Sync camera with viewport exactly
       this.updateCamera();
+      this.updateGrid();
       this.renderer.render(this.scene, this.camera);
   }
 }

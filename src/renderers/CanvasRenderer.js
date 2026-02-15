@@ -51,6 +51,90 @@ export class CanvasRenderer extends Renderer {
       this.lastRenderedState = { ...this.viewport.getRange() };
       this.isCached = true;
   }
+  
+  // Helper: Calculate nice tick values
+  calculateNiceTicks(min, max, targetCount = 8) {
+      const range = max - min;
+      if (range === 0) return [min];
+      
+      // Find a "nice" step size
+      const rawStep = range / targetCount;
+      const magnitude = Math.pow(10, Math.floor(Math.log10(rawStep)));
+      const normalized = rawStep / magnitude;
+      
+      let niceStep;
+      if (normalized < 1.5) niceStep = 1;
+      else if (normalized < 3) niceStep = 2;
+      else if (normalized < 7) niceStep = 5;
+      else niceStep = 10;
+      
+      niceStep *= magnitude;
+      
+      const start = Math.ceil(min / niceStep) * niceStep;
+      const ticks = [];
+      for (let val = start; val <= max; val += niceStep) {
+          ticks.push(val);
+      }
+      return ticks;
+  }
+  
+  // Helper: Format Y-axis labels
+  formatYLabel(value) {
+      const abs = Math.abs(value);
+      if (abs >= 1e6) return (value / 1e6).toFixed(1) + 'M';
+      if (abs >= 1e3) return (value / 1e3).toFixed(1) + 'K';
+      return value.toFixed(0);
+  }
+  
+  // Draw grid and axis labels
+  drawGrid(toX, toY, width, height, start, end) {
+      const Y_MIN = -2000;
+      const Y_MAX = 2000;
+      
+      // Calculate ticks
+      const yTicks = this.calculateNiceTicks(Y_MIN, Y_MAX, 8);
+      const xTicks = this.calculateNiceTicks(start, end, 10);
+      
+      this.ctx.save();
+      this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+      this.ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+      this.ctx.font = '11px monospace';
+      this.ctx.lineWidth = 1;
+      
+      // Draw Y-axis grid and labels
+      for (const yVal of yTicks) {
+          const y = toY(yVal);
+          if (y < 0 || y > height) continue;
+          
+          // Grid line
+          this.ctx.beginPath();
+          this.ctx.moveTo(0, y);
+          this.ctx.lineTo(width, y);
+          this.ctx.stroke();
+          
+          // Label
+          const label = this.formatYLabel(yVal);
+          this.ctx.fillText(label, 5, y - 3);
+      }
+      
+      // Draw X-axis grid and labels
+      for (const xVal of xTicks) {
+          const x = toX(xVal);
+          if (x < 0 || x > width) continue;
+          
+          // Grid line
+          this.ctx.beginPath();
+          this.ctx.moveTo(x, 0);
+          this.ctx.lineTo(x, height);
+          this.ctx.stroke();
+          
+          // Label
+          const label = Math.floor(xVal).toString();
+          this.ctx.fillText(label, x + 2, height - 5);
+      }
+      
+      this.ctx.restore();
+  }
 
   // Fast render using cache
   renderInteraction() {
@@ -112,6 +196,9 @@ export class CanvasRenderer extends Renderer {
       
       const toX = (v) => (v - start) / range * width;
       const toY = (v) => height - ((v - Y_MIN) / Y_RANGE * height);
+      
+      // Draw grid first (behind data)
+      this.drawGrid(toX, toY, width, height, start, end);
       
       this.ctx.lineWidth = 1;
       
