@@ -209,6 +209,8 @@ export class CanvasRenderer extends Renderer {
                   // Or just store the computed screen points?
               }
               
+              
+              
               // Re-approach: Build two arrays of points first
               const topPoints = [];
               const bottomPoints = [];
