@@ -75,6 +75,71 @@ export class MockServer {
             }
         }
         this.data.push(series);
+    } 
+    else if (type === 'pulse-wave') {
+        this.nSeries = 1;
+        const series = new Float32Array(this.nPoints);
+        
+        // Create alternating regions of calm and chaos
+        const regionSize = Math.floor(this.nPoints / 20); // 20 regions
+        
+        for(let r=0; r<20; r++) {
+            const offset = r * regionSize;
+            const isVolatile = r % 3 === 0; // Every 3rd region is volatile
+            
+            if (isVolatile) {
+                // Chaotic spikes - high volatility
+                for(let j=0; j<regionSize; j++) {
+                    if (offset + j >= this.nPoints) break;
+                    // Sharp pulses
+                    const phase = (j / regionSize) * 8; // 8 pulses per region
+                    const pulse = Math.sin(phase * Math.PI * 2) > 0.7 ? 1500 : -200;
+                    const noise = (this.rng() - 0.5) * 400;
+                    series[offset + j] = pulse + noise;
+                }
+            } else {
+                // Calm region - low volatility
+                const baseValue = (r / 20) * 400 - 200; // Slight drift
+                for(let j=0; j<regionSize; j++) {
+                    if (offset + j >= this.nPoints) break;
+                    const smoothWave = Math.sin((j / regionSize) * Math.PI) * 30;
+                    const tinyNoise = (this.rng() - 0.5) * 5;
+                    series[offset + j] = baseValue + smoothWave + tinyNoise;
+                }
+            }
+        }
+        this.data.push(series);
+    }
+    else if (type === 'multi-wave') {
+        this.nSeries = 20;
+        
+        for (let i = 0; i < this.nSeries; i++) {
+            const series = new Float32Array(this.nPoints);
+            
+            // Each series has different characteristics
+            const volatilityLevel = i / this.nSeries; // 0 to 1
+            const baseFreq = 0.001 + volatilityLevel * 0.05;
+            const baseAmp = 50 + volatilityLevel * 1500;
+            
+            for (let j = 0; j < this.nPoints; j++) {
+                // Smooth wave with increasing volatility
+                const wave = Math.sin(j * baseFreq) * baseAmp;
+                
+                // Add noise proportional to volatility
+                const noiseAmp = volatilityLevel * baseAmp * 0.3;
+                const noise = (this.rng() - 0.5) * noiseAmp;
+                
+                // Occasional spikes for high volatility series
+                let spike = 0;
+                if (volatilityLevel > 0.5 && this.rng() > 0.98) {
+                    spike = (this.rng() - 0.5) * baseAmp * 2;
+                }
+                
+                series[j] = wave + noise + spike;
+            }
+            
+            this.data.push(series);
+        }
     }
     
     this.totalPoints = this.nSeries * this.nPoints;

@@ -11,7 +11,7 @@ async function main() {
 
   // --- Configuration ---
   const config = {
-    renderer: 'three', // or 'canvas'
+    renderer: 'canvas', // or 'canvas'
     generator: 'random-walk',
     nSeries: 100,
     nPoints: 100000,
@@ -73,13 +73,18 @@ async function main() {
   // --- GUI ---
   const pane = new Pane({ container: controlsContainer });
   pane.addBinding(config, 'renderer', {
-      options: { ThreeJS: 'three', Canvas2D: 'canvas' }
+      options: { Canvas2D: 'canvas',  ThreeJS: 'three' }
   }).on('change', (ev) => {
       setRenderer(ev.value);
   });
   
   pane.addBinding(config, 'generator', {
-      options: { 'Random Walk (100)': 'random-walk', 'Variable Sine (1)': 'variable-sine' }
+      options: { 
+          'Random Walk (100)': 'random-walk', 
+          'Variable Sine (1)': 'variable-sine',
+          'Pulse Wave (1)': 'pulse-wave',
+          'Multi Wave (20)': 'multi-wave'
+      }
   }).on('change', (ev) => {
       setGenerator(ev.value);
   });
@@ -122,6 +127,10 @@ async function main() {
         activeRenderer.setData(data);
         // Force full render
         activeRenderer.render(); 
+        // For Canvas2D: capture (data+grid) then render axis on top
+        if (activeRenderer instanceof CanvasRenderer) {
+            activeRenderer.capture();
+        }
     }
   };
 
@@ -129,7 +138,7 @@ async function main() {
   viewport.onChange(() => {
      // If canvas, we might be interacting
      if (config.renderer === 'canvas' && isInteracting && activeRenderer instanceof CanvasRenderer) {
-         // Fast render
+         // Fast render using cache
          activeRenderer.renderInteraction();
      } else {
          // ThreeJS handles continuous update well usually, 
@@ -142,6 +151,10 @@ async function main() {
   // Debounced Data Fetch
   const onSettle = () => {
       isInteracting = false;
+      // Invalidate cache on stabilize -> Removed to prevent flash
+      // if (activeRenderer instanceof CanvasRenderer) {
+      //     activeRenderer.isCached = false;
+      // }
       requestData();
   };
   
@@ -327,7 +340,7 @@ async function main() {
   });
 
   // Init
-  setRenderer('three');
+  setRenderer('canvas');
   animate();
   requestData(); // Initial data
 }

@@ -22,13 +22,12 @@ body {
 }
 
 #container {
-  width: 550px;
-  height: 350px;
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  border: 1px solid #444;
+  width: 100vw;
+  height: 100vh;
+  position: fixed;
+  top: 0;
+  left: 0;
+  border: none;
   background: #111;
 }
 

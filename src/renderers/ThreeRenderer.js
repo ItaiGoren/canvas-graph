@@ -66,11 +66,13 @@ export class ThreeRenderer extends Renderer {
     
     const fragmentShader = `
         uniform vec3 uColor;
+        uniform float uYRange;
         varying float vRange;
         void main() {
             // Volatility factor (0.0 to 1.0)
-            // Assume bin range > 50 is volatile
-            float volatility = clamp(vRange / 50.0, 0.0, 1.0);
+            // Calculate as ratio: bin height / canvas height
+            // 100% = bin fills entire canvas, 0% = flat line
+            float volatility = clamp(vRange / uYRange, 0.0, 1.0);
             
             // Stripe Pattern (1px stripe every 2px)
             // Period = 2.0. Duty cycle = 0.5 (1px on, 1px off).
@@ -92,7 +94,8 @@ export class ThreeRenderer extends Renderer {
 
     const areaMaterial = new THREE.ShaderMaterial({
         uniforms: {
-            uColor: { value: new THREE.Color(0x00ff00) }
+            uColor: { value: new THREE.Color(0x00ff00) },
+            uYRange: { value: 4000 } // Y range is -2000 to 2000
         },
         vertexShader,
         fragmentShader,
