@@ -28,6 +28,8 @@ export class CanvasRenderer extends Renderer {
     for(let i=0; i<100; i++) {
         this.colors.push(`hsl(${Math.floor(i/100 * 360)}, 80%, 50%)`);
     }
+    
+    this.markersConfig = [];
   }
 
   resize(width, height) {
@@ -179,8 +181,10 @@ export class CanvasRenderer extends Renderer {
       const toY = (v) => height - ((v - Y_MIN) / Y_RANGE * height);
       
       // Draw to Cache
-      this.renderData(this.cacheCtx, toX, toY, width, height, start, end);
+      // Order: Grid -> Markers -> Data
       this.drawGrid(this.cacheCtx, toX, toY, width, height, start, end);
+      this.drawMarkers(this.cacheCtx, toX, toY, width, height, start, end);
+      this.renderData(this.cacheCtx, toX, toY, width, height, start, end);
       
       // Finalize Cache
       this.isCached = true;
@@ -400,6 +404,68 @@ export class CanvasRenderer extends Renderer {
           this.ctx.fillText(label, x + 2, height - 5);
       }
       
+      // Marker Labels (on top of everything)
+       if (this.markersConfig) {
+          this.ctx.textAlign = 'center';
+          this.ctx.fillStyle = 'rgba(0, 136, 255, 0.8)';
+          this.ctx.font = 'bold 12px monospace';
+          
+          for(const m of this.markersConfig) {
+               // Check bounds roughly
+               if (m.end < start || m.start > end) continue;
+               
+               const center = m.start + (m.end - m.start) / 2;
+               const x = toX(center);
+               
+               // Clip?
+               // if (x < 0 || x > width) ... let it clip naturally
+               
+               this.ctx.fillText(m.label, x, 20);
+          }
+      }
+
       this.ctx.restore();
+  }
+
+  setMarkers(markers) {
+      this.markersConfig = markers || [];
+      this.isCached = false; // Invalidate cache to redraw markers (since we draw them in drawMarkers -> cache)
+  }
+
+  drawMarkers(ctx, toX, toY, width, height, start, end) {
+      if (!this.markersConfig || this.markersConfig.length === 0) return;
+
+      const Y_MIN = -2000;
+      const Y_MAX = 2000;
+      
+      ctx.save();
+      
+      for(const m of this.markersConfig) {
+          if (m.end < start || m.start > end) continue;
+
+          const x1 = toX(m.start);
+          const x2 = toX(m.end);
+          const w = x2 - x1;
+          
+          // Fill
+          ctx.fillStyle = 'rgba(0, 136, 255, 0.1)';
+          ctx.fillRect(x1, 0, w, height);
+          
+          // Side Lines
+          ctx.strokeStyle = 'rgba(0, 136, 255, 0.5)';
+          ctx.lineWidth = 1;
+          
+          ctx.beginPath();
+          ctx.moveTo(x1, 0);
+          ctx.lineTo(x1, height);
+          ctx.stroke();
+          
+          ctx.beginPath();
+          ctx.moveTo(x2, 0);
+          ctx.lineTo(x2, height);
+          ctx.stroke();
+      }
+      
+      ctx.restore();
   }
 }

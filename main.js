@@ -19,7 +19,8 @@ async function main() {
     showArea: true,
     lineWidth: 2,
     maxBins: 3000, // Cap for number of bins (dynamic based on width)
-    sampleRate: 100 // ms
+    sampleRate: 100, // ms
+    showMarkers: true
   };
 
   const StressLevels = {
@@ -29,6 +30,23 @@ async function main() {
       'Ludicrous (1B)': { nSeries: 1000, nPoints: 1000000 },
       'Custom': {}
   };
+
+  // --- Mock Data ---
+  const markers = [];
+  const generateMarkers = () => {
+    markers.length = 0;
+    // Generate 3 random areas
+    for(let i=0; i<3; i++) {
+        const start = Math.floor(Math.random() * (config.nPoints * 0.8));
+        const width = Math.floor(Math.random() * (config.nPoints * 0.1) + 1000);
+        markers.push({
+            start: start,
+            end: start + width,
+            label: `Area ${i+1}`
+        });
+    }
+  };
+  generateMarkers();
 
   // --- Core ---
   const server = new MockServer(config.nSeries, config.nPoints);
@@ -47,6 +65,10 @@ async function main() {
   const updateConfig = () => {
       threeRenderer.lineWidth = config.lineWidth;
       canvasRenderer.lineWidth = config.lineWidth;
+      
+      const activeMarkers = config.showMarkers ? markers : [];
+      threeRenderer.setMarkers(activeMarkers);
+      canvasRenderer.setMarkers(activeMarkers);
   };
 
   // Initial Renderer
@@ -88,6 +110,9 @@ async function main() {
       
       requestData();
   };
+  
+  // Initial config application
+  updateConfig();
 // ...
   // --- GUI ---
   const pane = new Pane({ container: controlsContainer });
@@ -161,11 +186,13 @@ async function main() {
           requestData();
       });
 
-  folderView.addBinding(config, 'sampleRate', { min: 10, max: 5000, step: 10 })
+  folderView.addBinding(config, 'showMarkers', { label: 'Show Area Markers' })
       .on('change', () => {
-          // We might need to pass this to renderers
-          if (activeRenderer) activeRenderer.render(); 
-          requestData();
+          updateConfig();
+          if (activeRenderer instanceof CanvasRenderer) {
+              activeRenderer.isCached = false; // Force re-draw if baked into cache
+          }
+          activeRenderer.render();
       });
 
 

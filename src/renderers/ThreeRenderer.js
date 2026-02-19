@@ -506,10 +506,128 @@ export class ThreeRenderer extends Renderer {
       return this._lineWidth;
   }
 
+
+
+  setMarkers(markers) {
+      this.markersConfig = markers || [];
+      this.updateMarkers();
+  }
+
+  updateMarkers() {
+      // 1. Clear existing markers
+      // We can create a dedicated group for markers to easily clear them
+      if (!this.markerGroup) {
+          this.markerGroup = new THREE.Group();
+          this.scene.add(this.markerGroup);
+      }
+      this.markerGroup.clear();
+
+      // Clear existing HTML labels for markers
+      // We need to differentiate marker labels from axis labels.
+      // Let's use a separate container or class for marker labels?
+      // For now, let's just clear specific elements or re-render all?
+      // The updateGrid() re-renders axis labels every frame/update.
+      // We should probably render marker labels in render() similar to grid labels.
+  }
+
+  renderMarkers() {
+      if (!this.markersConfig || this.markersConfig.length === 0) return;
+      if (!this.markerGroup) return;
+
+      const Y_TOP = 2000;
+      const Y_BOTTOM = -2000;
+      
+      // Check if we need to rebuild geometry (simple approach: rebuild if count changes or just update?)
+      // For "toggle" we might just visible=true/false, but here we rebuild on setMarkers.
+      // In render(), we just ensure they are in the group.
+      
+      // Actually, since markers are static relative to data (X coords),
+      // we can build them once in setMarkers and just let the camera handle X position.
+      // However, we need to create the meshes.
+      
+      if (this.markerGroup.children.length === 0) {
+           const mat = new THREE.MeshBasicMaterial({ 
+               color: 0x0088ff, 
+               transparent: true, 
+               opacity: 0.1, 
+               side: THREE.DoubleSide,
+               depthWrite: false
+           });
+           const lineMat = new THREE.LineBasicMaterial({
+               color: 0x0088ff,
+               transparent: true,
+               opacity: 0.6
+           });
+
+           this.markersConfig.forEach(m => {
+               const width = m.end - m.start;
+               const center = m.start + width / 2;
+               
+               // Box
+               const planeGeo = new THREE.PlaneGeometry(width, Y_TOP - Y_BOTTOM);
+               const mesh = new THREE.Mesh(planeGeo, mat);
+               mesh.position.set(center, 0, -1); // Behind lines (z=0), but maybe in front of grid? Grid is ? Grid doesn't have z set explicitly, usually 0. Let's put markers at -5.
+               mesh.position.z = -5;
+               this.markerGroup.add(mesh);
+               
+               // Vertical Lines
+               const points = [
+                   new THREE.Vector3(m.start, Y_TOP, 0),
+                   new THREE.Vector3(m.start, Y_BOTTOM, 0),
+                   new THREE.Vector3(m.end, Y_TOP, 0),
+                   new THREE.Vector3(m.end, Y_BOTTOM, 0)
+               ];
+               // Left Line
+               const leftGeo = new THREE.BufferGeometry().setFromPoints([points[0], points[1]]);
+               const leftLine = new THREE.Line(leftGeo, lineMat);
+               leftLine.position.z = -4; // Slightly in front of fill
+               this.markerGroup.add(leftLine);
+               
+               // Right Line
+               const rightGeo = new THREE.BufferGeometry().setFromPoints([points[2], points[3]]);
+               const rightLine = new THREE.Line(rightGeo, lineMat);
+               rightLine.position.z = -4;
+               this.markerGroup.add(rightLine);
+           });
+      }
+      
+      // Update HTML Labels
+      // We append to labelContainer. 
+      // Note: updateGrid clears labelContainer every frame. 
+      // So we should call renderMarkers AFTER updateGrid.
+      
+      const { start, end } = this.viewport.getRange();
+      
+      for(const m of this.markersConfig) {
+          // Check if visible
+          if (m.end < start || m.start > end) continue;
+          
+          const center = m.start + (m.end - m.start) / 2;
+          const ndc = this.worldToScreen(center, Y_TOP);
+          
+          if (!ndc) continue;
+          
+          const label = document.createElement('div');
+          label.style.position = 'absolute';
+          label.style.left = ndc.x + 'px';
+          label.style.top = '10px'; // Top of screen
+          label.style.transform = 'translateX(-50%)';
+          label.style.color = 'rgba(0, 136, 255, 0.8)';
+          label.style.fontSize = '12px';
+          label.style.fontWeight = 'bold';
+          label.style.fontFamily = 'monospace';
+          label.style.pointerEvents = 'none';
+          label.style.whiteSpace = 'nowrap'; // Ensure one line
+          label.textContent = m.label;
+          this.labelContainer.appendChild(label);
+      }
+  }
+
+  // Override render to include markers
   render() {
-      // Sync camera with viewport exactly
       this.updateCamera();
-      this.updateGrid();
+      this.updateGrid(); // Clears labels
+      this.renderMarkers(); // Adds marker labels
       this.renderer.render(this.scene, this.camera);
   }
 }
