@@ -65,4 +65,15 @@ export class Viewport {
   getRange() {
       return { start: this.start, end: this.end, range: this.end - this.start };
   }
+
+  resize(totalPoints) {
+      this.totalPoints = totalPoints;
+      this.max = totalPoints;
+  }
+
+  setRange(start, end) {
+      this.start = Math.max(0, start);
+      this.end = Math.min(this.totalPoints, end);
+      this.notify();
+  }
 }

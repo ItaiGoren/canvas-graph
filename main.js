@@ -13,11 +13,21 @@ async function main() {
   const config = {
     renderer: 'canvas', // or 'canvas'
     generator: 'random-walk',
+    stressLevel: 'Normal (10M)',
     nSeries: 100,
     nPoints: 100000,
     showArea: true,
     lineWidth: 2,
     maxBins: 3000, // Cap for number of bins (dynamic based on width)
+    gapThreshold: 100 // ms
+  };
+
+  const StressLevels = {
+      'Normal (10M)': { nSeries: 100, nPoints: 100000 },
+      'Heavy (50M)': { nSeries: 200, nPoints: 250000 },
+      'Extreme (250M)': { nSeries: 500, nPoints: 500000 },
+      'Ludicrous (1B)': { nSeries: 1000, nPoints: 1000000 },
+      'Custom': {}
   };
 
   // --- Core ---
@@ -58,8 +68,17 @@ async function main() {
   };
   
   const setGenerator = async (type) => {
+      server.resize(config.nSeries, config.nPoints);
       await server.generateData(type);
-      config.nSeries = server.nSeries;
+      
+      // Update config to match server (in case server clamped values, though it doesn't currently)
+      // config.nSeries = server.nSeries; 
+      
+      pane.refresh();
+      
+      // Reset viewport to cover new range
+      viewport.resize(config.nPoints);
+      viewport.setRange(0, config.nPoints);
       pane.refresh();
       
       // Reset viewport?
@@ -80,28 +99,72 @@ async function main() {
   
   pane.addBinding(config, 'generator', {
       options: { 
-          'Random Walk (100)': 'random-walk', 
-          'Variable Sine (1)': 'variable-sine',
-          'Pulse Wave (1)': 'pulse-wave',
-          'Multi Wave (20)': 'multi-wave'
+          'Random Walk': 'random-walk', 
+          'Variable Sine': 'variable-sine',
+          'Pulse Wave': 'pulse-wave',
+          'Multi Wave': 'multi-wave',
+          'Sparse Sine': 'sparse-sine'
       }
   }).on('change', (ev) => {
       setGenerator(ev.value);
   });
   
-  pane.addBinding(config, 'nSeries', { readonly: true });
-  pane.addBinding(config, 'lineWidth', { min: 1, max: 10, step: 1 })
+  const folderStress = pane.addFolder({ title: 'Stress Test' });
+  
+  folderStress.addBinding(config, 'stressLevel', {
+      options: {
+          'Normal (10M)': 'Normal (10M)', 
+          'Heavy (50M)': 'Heavy (50M)',
+          'Extreme (250M)': 'Extreme (250M)',
+          'Ludicrous (1B)': 'Ludicrous (1B)',
+          'Custom': 'Custom'
+      }
+  }).on('change', (ev) => {
+      if (ev.value !== 'Custom') {
+          const settings = StressLevels[ev.value];
+          config.nSeries = settings.nSeries;
+          config.nPoints = settings.nPoints;
+          setGenerator(config.generator);
+      }
+  });
+
+  folderStress.addBinding(config, 'nSeries', { min: 1, max: 2000, step: 1 })
+      .on('change', () => {
+          config.stressLevel = 'Custom';
+          pane.refresh();
+          // Debounce/Delay regeneration? Or just button?
+          // Adding a button for explicit regeneration when Custom
+      });
+      
+  folderStress.addBinding(config, 'nPoints', { min: 1000, max: 2000000, step: 1000 })
+      .on('change', () => {
+          config.stressLevel = 'Custom';
+          pane.refresh();
+      });
+
+  folderStress.addButton({ title: 'Regenerate Data' }).on('click', () => {
+      setGenerator(config.generator);
+  });
+
+
+  const folderView = pane.addFolder({ title: 'View Settings' });
+
+  folderView.addBinding(config, 'lineWidth', { min: 1, max: 10, step: 1 })
       .on('change', () => {
           updateConfig();
           if (config.renderer === 'three') requestData(); 
           else activeRenderer.render();
       });
 
-
-
-  pane.addBinding(config, 'maxBins', { min: 100, max: 10000, step: 100 })
+  folderView.addBinding(config, 'maxBins', { min: 100, max: 10000, step: 100 })
       .on('change', () => {
           requestData();
+      });
+
+  folderView.addBinding(config, 'gapThreshold', { min: 10, max: 5000, step: 10 })
+      .on('change', () => {
+          // We might need to pass this to renderers
+          if (activeRenderer) activeRenderer.render(); 
       });
 
 
@@ -115,7 +178,7 @@ async function main() {
     // Determine LOD
     // User logic: Bins = Canvas Width (CSS pixels), clamped by maxBins
     const canvasWidth = container.clientWidth;
-    const targetBins = Math.min(canvasWidth, config.maxBins || 3000);
+    const targetBins = config.maxBins;
     
     // We calculate lod (chunk size) to aim for 'targetBins' total bins in the current view
     const lod = Math.max(1, Math.ceil(range.range / targetBins)); 
@@ -175,6 +238,32 @@ async function main() {
   // --- Tooltip Logic ---
   const tooltip = document.getElementById('tooltip');
   
+  // Helper: Binary Search for closest time
+  const binarySearchClosest = (arr, target) => {
+      let l = 0, r = arr.length - 1;
+      while (l <= r) {
+          const m = Math.floor((l + r) / 2);
+          if (arr[m] < target) l = m + 1;
+          else r = m - 1;
+      }
+      // l is insertion point. Check l and l-1
+      const i1 = l;
+      const i2 = l - 1;
+      
+      let bestI = -1;
+      let minDiff = Infinity;
+      
+      if (i1 >= 0 && i1 < arr.length) {
+          const diff = Math.abs(arr[i1] - target);
+          if (diff < minDiff) { minDiff = diff; bestI = i1; }
+      }
+      if (i2 >= 0 && i2 < arr.length) {
+          const diff = Math.abs(arr[i2] - target);
+          if (diff < minDiff) { minDiff = diff; bestI = i2; }
+      }
+      return bestI;
+  };
+
   const updateTooltip = (clientX, clientY) => {
       if (isInteracting || !currentDataChunk) {
           tooltip.style.display = 'none';
@@ -196,65 +285,107 @@ async function main() {
       const range = end - start;
       const width = rect.width;
       const height = rect.height;
+      const { data, type, x: dataX } = currentDataChunk;
       
-      // Map x to data index
-      // x / width = (index - start) / range
-      const dataIndex = start + (x / width) * range;
-      
-      // Find index in currentDataChunk
-      // chunk.start is the 0-th element in arrays
-      const localIndex = Math.floor(dataIndex - currentDataChunk.start);
-      
-      if (localIndex < 0) return;
-      
-      // Find closest series
-      // Y mapping: height - ((v - Y_MIN) / Y_RANGE * height) = pixelY
-      // v = Y_MIN + (height - pixelY) / height * Y_RANGE
+      // Y mapping Helper
       const Y_MIN = -2000;
       const Y_RANGE = 4000;
-      const dataY = Y_MIN + ((height - y) / height) * Y_RANGE;
+      const mouseDataY = Y_MIN + ((height - y) / height) * Y_RANGE;
 
       let bestDist = Infinity;
       let bestSeries = -1;
       let bestVal = 0;
-      
-      const { data, type } = currentDataChunk;
-      
-      // If aggregated, data has 2 values per step [min, max]
-      // step is implicitly passed or handled.
-      // If agg, indices are 2x.
-      
-      const isAgg = type === 'aggregated';
-      const step = currentDataChunk.step || 1;
-      // If agg, one visual bin = step points.
-      // localIndex is in "raw points".
-      // binIndex = localIndex / step
-      const binIndex = isAgg ? Math.floor(localIndex / step) : localIndex;
-      
-      for(let i=0; i<data.length; i++) {
-          const series = data[i];
-          let val;
-          if (isAgg) {
-              if (binIndex * 2 + 1 >= series.length) continue;
-              // Take average of min/max? Or closest?
-              const min = series[binIndex * 2];
-              const max = series[binIndex * 2 + 1];
-              // If mouse is between min/max, dist is 0
-              if (dataY >= min && dataY <= max) {
-                  val = dataY; // Inside area
-              } else {
-                  val = (dataY < min) ? min : max;
-              }
-          } else {
-              if (localIndex >= series.length) continue;
-              val = series[localIndex];
-          }
+      let displayIndexOrTime = 0;
+
+      if (type === 'sparse' || type === 'sparse-aggregated') {
+           // Time Based
+           const cursorTime = start + (x / width) * range;
+           displayIndexOrTime = cursorTime;
+           
+           for(let i=0; i<data.length; i++) {
+               const seriesY = data[i];
+               const seriesX = dataX ? dataX[i] : null; 
+               
+               let val;
+               
+               if (type === 'sparse') { // Raw Sparse
+                   // Binary Search in X
+                   if (!seriesX) continue;
+                   const idx = binarySearchClosest(seriesX, cursorTime);
+                   if (idx === -1) continue;
+                   
+                   // Check if looking at a gap?
+                   // If closest point is > gapThreshold away, maybe show nothing or 0?
+                   // For tooltip, showing closest point value is usually fine, 
+                   // but maybe indicate if it's far.
+                   
+                   val = seriesY[idx];
+               } else {
+                   // Sparse Aggregated (bins)
+                   // step is binSizeMs
+                   const step = currentDataChunk.step || 10;
+                   const relTime = cursorTime - start;
+                   const binIdx = Math.floor(relTime / step);
+                   
+                   if (binIdx < 0 || binIdx * 2 >= seriesY.length) continue;
+                   
+                   const min = seriesY[binIdx * 2];
+                   const max = seriesY[binIdx * 2 + 1];
+                   
+                   // If gap (0,0), min/max are 0.
+                   if (min === 0 && max === 0) val = 0;
+                   else {
+                      if (mouseDataY >= min && mouseDataY <= max) val = mouseDataY;
+                      else val = (mouseDataY < min) ? min : max;
+                   }
+               }
+               
+               const dist = Math.abs(val - mouseDataY);
+               if (dist < bestDist) {
+                   bestDist = dist;
+                   bestSeries = i;
+                   bestVal = val;
+               }
+           }
+           
+      } else {
+          // Legacy Index Based (Index = X)
+          // Map x to data index
+          const dataIndex = start + (x / width) * range;
+          displayIndexOrTime = Math.floor(dataIndex);
           
-          const dist = Math.abs(val - dataY);
-          if (dist < bestDist) {
-              bestDist = dist;
-              bestSeries = i;
-              bestVal = isAgg ? ((series[binIndex*2] + series[binIndex*2+1])/2) : val;
+          // Find index in currentDataChunk
+          const localIndex = Math.floor(dataIndex - currentDataChunk.start);
+          
+          if (localIndex < 0) return;
+          
+          const isAgg = type === 'aggregated';
+          const step = currentDataChunk.step || 1;
+          const binIndex = isAgg ? Math.floor(localIndex / step) : localIndex;
+          
+          for(let i=0; i<data.length; i++) {
+              const series = data[i];
+              let val;
+              if (isAgg) {
+                  if (binIndex * 2 + 1 >= series.length) continue;
+                  const min = series[binIndex * 2];
+                  const max = series[binIndex * 2 + 1];
+                  if (mouseDataY >= min && mouseDataY <= max) {
+                      val = mouseDataY; 
+                  } else {
+                      val = (mouseDataY < min) ? min : max;
+                  }
+              } else {
+                  if (localIndex >= series.length) continue;
+                  val = series[localIndex];
+              }
+              
+              const dist = Math.abs(val - mouseDataY);
+              if (dist < bestDist) {
+                  bestDist = dist;
+                  bestSeries = i;
+                  bestVal = isAgg ? ((series[binIndex*2] + series[binIndex*2+1])/2) : val;
+              }
           }
       }
       
@@ -262,7 +393,11 @@ async function main() {
           tooltip.style.display = 'block';
           tooltip.style.left = (clientX + 10) + 'px';
           tooltip.style.top = (clientY + 10) + 'px';
-          tooltip.textContent = `Series: ${bestSeries}\nValue: ${bestVal.toFixed(2)}\nIndex: ${Math.floor(dataIndex)}`;
+          
+          const label = (type === 'sparse' || type === 'sparse-aggregated') ? 'Time' : 'Index';
+          const valLabel = (type === 'sparse' || type === 'sparse-aggregated') ? displayIndexOrTime.toFixed(2) + 'ms' : displayIndexOrTime;
+          
+          tooltip.textContent = `Series: ${bestSeries}\nValue: ${bestVal.toFixed(2)}\n${label}: ${valLabel}`;
       } else {
           tooltip.style.display = 'none';
       }

@@ -232,26 +232,105 @@ export class CanvasRenderer extends Renderer {
               }
               ctx.stroke();
               
+          } else if (type === 'sparse') {
+              // Sparse Line
+              const { x: dataX } = this.currentData;
+              const seriesX = dataX[i]; // Float64Array
+              const len = series.length;
+              
+              if (len === 0) continue;
+              
+              ctx.beginPath();
+              ctx.lineWidth = 1.5; 
+              ctx.lineJoin = 'round';
+              ctx.lineCap = 'round';
+              
+              const gapThreshold = 100; // ms. Todo: make configurable
+              
+              // Edge Heuristic: 
+              // Check distance of first point from viewport start
+              const firstX = seriesX[0];
+              const distToStart = firstX - start;
+              
+              if (distToStart > gapThreshold) {
+                  // Gap at start -> Move to (start, 0) then (firstX, 0)
+                  ctx.moveTo(toX(start), toY(0));
+                  ctx.lineTo(toX(firstX), toY(0));
+              } else {
+                  // Continuity -> Move to (start, firstY) - approximating
+                  ctx.moveTo(toX(start), toY(series[0]));
+              }
+              
+              ctx.lineTo(toX(firstX), toY(series[0]));
+              
+              for(let j=1; j<len; j++) {
+                  const t = seriesX[j];
+                  const prevT = seriesX[j-1];
+                  const dt = t - prevT;
+                  
+                  const px = toX(t);
+                  const py = toY(series[j]);
+                  
+                  if (dt > gapThreshold) {
+                      // Gap detected! Drop to zero
+                      const prevPx = toX(prevT);
+                      const zeroY = toY(0);
+                      
+                      ctx.lineTo(prevPx, zeroY);
+                      ctx.lineTo(px, zeroY);
+                      ctx.lineTo(px, py);
+                  } else {
+                      ctx.lineTo(px, py);
+                  }
+              }
+              
+              // Trailing Edge Heuristic
+              const lastX = seriesX[len-1];
+              const distToEnd = end - lastX;
+              if (distToEnd > gapThreshold) {
+                  ctx.lineTo(toX(lastX), toY(0));
+                  ctx.lineTo(toX(end), toY(0));
+              } else {
+                  ctx.lineTo(toX(end), toY(series[len-1]));
+              }
+
+              ctx.stroke();
+
           } else {
-              // Aggregated (Area/Bar)
-              const binCount = series.length / 2;
-              const dataStart = this.currentData.start;
+              // Aggregated (Area/Bar) or Sparse-Aggregated
+              // ... existing aggregation logic ...
+              // We need to handle 'sparse-aggregated' which has time-step bins
+              
+              const isSparseAgg = type === 'sparse-aggregated';
               const chunkStep = step || 1;
+              const binCount = isSparseAgg ? series.length / 2 : series.length / 2;
               
-              const pixelHeight = this.lineWidth || 1; 
+              // ... existing buffer build ...
+              // Reuse logic but ensure X mapping uses bin index mapped to time or index
               
-              // Build two arrays of points first
               const topPoints = [];
               const bottomPoints = [];
               
               for(let j=0; j<binCount; j++) {
-                  const globalIdx = dataStart + j * chunkStep;
-                  const x = toX(globalIdx + chunkStep/2);
+                   let globalIdx, x;
+                   if (isSparseAgg) {
+                       // step is binSizeMs
+                       // start is startTime
+                       const time = start + j * step + step/2;
+                       x = toX(time);
+                   } else {
+                       globalIdx = this.currentData.start + j * chunkStep;
+                       x = toX(globalIdx + chunkStep/2);
+                   }
+                   
                   const minVal = series[j*2];
                   const maxVal = series[j*2+1];
                   
-                  let pyMin = toY(minVal); // Higher pixel value (bottom)
-                  let pyMax = toY(maxVal); // Lower pixel value (top)
+                  // If gap (0,0), we might want to collapse
+                  // But visual 0 is fine
+                  
+                  let pyMin = toY(minVal); 
+                  let pyMax = toY(maxVal); 
                   
                   if (pyMin - pyMax < 1) {
                       const mid = (pyMin + pyMax) / 2;
@@ -266,21 +345,22 @@ export class CanvasRenderer extends Renderer {
               ctx.beginPath();
               
               // Trace Top
-              ctx.moveTo(topPoints[0], topPoints[1]);
-              for(let j=1; j<binCount; j++) {
-                  ctx.lineTo(topPoints[j*2], topPoints[j*2+1]);
+              if (topPoints.length > 0) {
+                  ctx.moveTo(topPoints[0], topPoints[1]);
+                  for(let j=1; j<binCount; j++) {
+                      ctx.lineTo(topPoints[j*2], topPoints[j*2+1]);
+                  }
+                  
+                  // Trace Bottom (Reverse)
+                  for(let j=binCount-1; j>=0; j--) {
+                      ctx.lineTo(bottomPoints[j*2], bottomPoints[j*2+1]);
+                  }
+                  
+                  ctx.closePath();
+                  ctx.lineWidth = 1; 
+                  ctx.fill();
+                  ctx.stroke(); 
               }
-              
-              // Trace Bottom (Reverse)
-              for(let j=binCount-1; j>=0; j--) {
-                  ctx.lineTo(bottomPoints[j*2], bottomPoints[j*2+1]);
-              }
-              
-              ctx.closePath();
-              
-              ctx.lineWidth = 1; 
-              ctx.fill();
-              ctx.stroke(); // Encapsulate
           }
       }
   }

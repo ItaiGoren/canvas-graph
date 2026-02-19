@@ -5,7 +5,8 @@ export class MockServer {
     this.nSeries = nSeries;
     this.nPoints = nPoints;
     this.totalPoints = nSeries * nPoints;
-    this.data = []; // Array of Float32Arrays
+    this.data = []; // Array of Float32Arrays (Y values)
+    this.dataX = []; // Array of Float64Arrays (X timestamps)
     this.rng = seedrandom('benchmark-seed');
     this.latency = 100; // ms
   }
@@ -14,15 +15,22 @@ export class MockServer {
     await this.generateData('random-walk');
   }
 
+  resize(nSeries, nPoints) {
+      this.nSeries = nSeries;
+      this.nPoints = nPoints;
+      this.totalPoints = nSeries * nPoints;
+  }
+
   async generateData(type) {
     console.time('Data Generation');
     this.data = [];
+    this.dataX = [];
     
     // Reset rng
     this.rng = seedrandom('benchmark-seed');
 
     if (type === 'random-walk') {
-        this.nSeries = 100; // Reset to default
+        // this.nSeries = 100; // Removed hard reset to allow stress testing
         for (let i = 0; i < this.nSeries; i++) {
             const series = new Float32Array(this.nPoints);
             let y = 0;
@@ -141,6 +149,36 @@ export class MockServer {
             this.data.push(series);
         }
     }
+    else if (type === 'sparse-sine') {
+        this.nSeries = 1;
+        const seriesY = new Float32Array(this.nPoints);
+        const seriesX = new Float64Array(this.nPoints);
+        
+        let currentTime = 0;
+        
+        for (let j = 0; j < this.nPoints; j++) {
+            // Jittered sample rate (avg 10ms)
+            const dt = 10 + (this.rng() - 0.5) * 2; 
+            currentTime += dt;
+            
+            // Random chance for a gap (> 1s)
+            // 0.5% chance per point
+            if (this.rng() > 0.995) {
+                const gap = 1000 + this.rng() * 4000; // 1s to 5s gap
+                currentTime += gap;
+            }
+            
+            seriesX[j] = currentTime;
+            
+            // Value
+            const val = Math.sin(currentTime * 0.001) * 500;
+            const noise = (this.rng() - 0.5) * 50;
+            seriesY[j] = val + noise;
+        }
+        
+        this.data.push(seriesY);
+        this.dataX.push(seriesX);
+    }
     
     this.totalPoints = this.nSeries * this.nPoints;
     console.timeEnd('Data Generation');
@@ -156,7 +194,113 @@ export class MockServer {
     });
   }
 
-  _processRequest(startIndex, endIndex, lodLevel) {
+  // Helper: Binary Search for Time Index
+  _binarySearch(arr, target) {
+      let l = 0, r = arr.length - 1;
+      while (l <= r) {
+          const m = Math.floor((l + r) / 2);
+          if (arr[m] < target) l = m + 1;
+          else r = m - 1;
+      }
+      return l; // Returns split point
+  }
+
+  _processRequest(startArg, endArg, lodLevel) {
+      if (!this.dataX || this.dataX.length === 0) {
+          // Fallback for non-sparse types (assume index = time)
+          const start = Math.max(0, Math.floor(startArg));
+          const end = Math.min(this.nPoints, Math.ceil(endArg));
+          return this._processLegacyRequest(start, end, lodLevel);
+      }
+      
+      // Sparse Logic: Arguments are TIME (ms)
+      const startTime = startArg;
+      const endTime = endArg;
+      
+      const resultData = [];
+      const resultX = [];
+      
+      // We assume all series share the same X for now for 'sparse-sine'
+      // But structure allows independent X.
+      // Let's assume dataX[0] is the master time for now if nSeries=1
+      
+      // For now, let's just handle the first series X for search bounds
+      const masterX = this.dataX[0];
+      
+      // Binary Search
+      let startIndex = this._binarySearch(masterX, startTime);
+      let endIndex = this._binarySearch(masterX, endTime);
+      
+      // Clamp
+      startIndex = Math.max(0, Math.min(startIndex, this.nPoints));
+      endIndex = Math.max(0, Math.min(endIndex, this.nPoints));
+      
+      // Raw Return
+      if (lodLevel === 1) {
+          for(let i=0; i<this.nSeries; i++) {
+              resultData.push(this.data[i].slice(startIndex, endIndex));
+              resultX.push(this.dataX[i].slice(startIndex, endIndex));
+          }
+          return { type: 'sparse', data: resultData, x: resultX, start: startTime, end: endTime };
+      }
+      
+      // Time-Based Aggregation
+      // Target: (endTime - startTime) / lodLevel bins? 
+      // Actually lodLevel usually means "pixels per bin" or "points per bin".
+      // Let's interpret 'lodLevel' as 'ms per bin'.
+      
+      const binSizeMs = lodLevel;
+      const binCount = Math.ceil((endTime - startTime) / binSizeMs);
+      
+      const resultAgg = [];
+      // X for aggregation? We can just send start/end/step.
+      
+      for(let i=0; i<this.nSeries; i++) {
+          const rawY = this.data[i];
+          const rawX = this.dataX[i];
+          
+          const bins = []; // Each bin: [min, max] or [0, 0] (gap)
+          
+          let currentPtr = startIndex;
+          
+          for(let b=0; b<binCount; b++) {
+              const binStartT = startTime + b * binSizeMs;
+              const binEndT = binStartT + binSizeMs;
+              
+              let min = Infinity;
+              let max = -Infinity;
+              let hasPoints = false;
+              
+              // Scan points in this time window
+              while(currentPtr < rawX.length && rawX[currentPtr] < binEndT) {
+                  // Only include if >= binStartT
+                  if(rawX[currentPtr] >= binStartT) {
+                      const val = rawY[currentPtr];
+                      if (val < min) min = val;
+                      if (val > max) max = val;
+                      hasPoints = true;
+                  }
+                  currentPtr++;
+              }
+              
+              if (hasPoints) {
+                  bins.push(min, max);
+              } else {
+                  // Gap / Empty Bin
+                  // Push marker? Or just 0,0?
+                  // Providing 0,0 is easiest visually
+                  bins.push(0, 0); 
+              }
+          }
+          resultAgg.push(new Float32Array(bins));
+      }
+      
+      return { type: 'sparse-aggregated', data: resultAgg, start: startTime, end: endTime, step: binSizeMs };
+  }
+
+  // Original Logic renamed
+  _processLegacyRequest(startIndex, endIndex, lodLevel) {
+    // ... Copy of original logic ...
     // Clamp
     const start = Math.max(0, Math.floor(startIndex));
     const end = Math.min(this.nPoints, Math.ceil(endIndex));

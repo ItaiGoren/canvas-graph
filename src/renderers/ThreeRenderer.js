@@ -21,8 +21,6 @@ export class ThreeRenderer extends Renderer {
     this.container.appendChild(this.renderer.domElement);
 
     // Pool of objects
-    // We need 100 series max.
-    this.maxSeries = 100;
     this.lines = []; // Array of THREE.Line
     this.meshes = []; // Array of THREE.Mesh (for areas)
     this.group = new THREE.Group();
@@ -48,11 +46,8 @@ export class ThreeRenderer extends Renderer {
     this.labelContainer.style.fontFamily = 'monospace';
     this.container.appendChild(this.labelContainer);
 
-    // Initialize Pool
-    // Materials
-    // Initialize Pool
-    // Materials
-    const lineMaterial = new THREE.LineBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.8 });
+    // Initialize Materials
+    this.lineMaterial = new THREE.LineBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.8 });
     
     // Volatility Shader
     const vertexShader = `
@@ -92,7 +87,7 @@ export class ThreeRenderer extends Renderer {
         }
     `;
 
-    const areaMaterial = new THREE.ShaderMaterial({
+    this.areaMaterial = new THREE.ShaderMaterial({
         uniforms: {
             uColor: { value: new THREE.Color(0x00ff00) },
             uYRange: { value: 4000 } // Y range is -2000 to 2000
@@ -102,22 +97,35 @@ export class ThreeRenderer extends Renderer {
         side: THREE.DoubleSide,
         transparent: true
     });
+    
+    // Initial Ensure
+    this.ensurePoolSize(100);
+  }
 
-    for(let i=0; i<this.maxSeries; i++) {
+  ensurePoolSize(count) {
+      if (this.lines.length >= count) return;
+      
+      const currentSize = this.lines.length;
+      const needed = count - currentSize;
+      
+      const maxPoints = 25000; // Covers maxBins (10k) * 2 for perimeter trace 
+      
+      for(let i=0; i<needed; i++) {
+        const idx = currentSize + i;
+        
         // Line Buffer (Raw View) - True THREE.Line
         const lineGeo = new THREE.BufferGeometry();
-        // Max points
-        const maxPoints = 25000; // Covers maxBins (10k) * 2 for perimeter trace 
-        const bufferSize = maxPoints; // 1 vert per point
+        const bufferSize = maxPoints; 
         
         const positions = new Float32Array(bufferSize * 3);
         lineGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
         lineGeo.setDrawRange(0, 0);
         
-        const line = new THREE.Line(lineGeo, lineMaterial.clone());
+        const line = new THREE.Line(lineGeo, this.lineMaterial.clone());
         line.visible = false;
         // Stagger colors
-        line.material.color.setHSL(i / this.maxSeries, 0.8, 0.5);
+        // Use golden angle approximation or something to vary colors even for large N
+        line.material.color.setHSL((idx % 100) / 100, 0.8, 0.5); 
         this.lines.push(line);
         this.group.add(line);
         
@@ -130,19 +138,14 @@ export class ThreeRenderer extends Renderer {
         const areaRange = new Float32Array(maxPoints * 6); // 1 float per vert
         areaGeo.setAttribute('aRange', new THREE.BufferAttribute(areaRange, 1));
         
-        const area = new THREE.Mesh(areaGeo, areaMaterial.clone());
-        // We need to clone uniforms if we want different colors, but for now green is fine. 
-        // actually we set HSL later.
-        // ShaderMaterial doesn't support .color property directly. We need to update uniform.
-        // Let's create a unique material per series? Or use an attribute for color?
-        // Unique material is easier for now given the pool size (100).
-        area.material = areaMaterial.clone();
-        area.material.uniforms.uColor.value.setHSL(i / this.maxSeries, 0.8, 0.5);
+        const area = new THREE.Mesh(areaGeo, this.areaMaterial.clone());
+        area.material = this.areaMaterial.clone();
+        area.material.uniforms.uColor.value.setHSL((idx % 100) / 100, 0.8, 0.5);
         
         area.visible = false;
         this.meshes.push(area);
         this.group.add(area);
-    }
+      }
   }
 
   resize(width, height) {
@@ -157,9 +160,12 @@ export class ThreeRenderer extends Renderer {
       // X: viewport.start to viewport.end
       // Y: -500 to 500 (approx random walk range)
       
+      // X: 0 to (end-start) [Relative Mode]
+      // Y: -500 to 500 (approx random walk range)
+      
       const { start, end } = this.viewport.getRange();
-      this.camera.left = start;
-      this.camera.right = end;
+      this.camera.left = 0; // Relative start
+      this.camera.right = end - start; // Relative width
       // We need a fixed Y scale or dynamic? Fixed for now.
       this.camera.top = 2000; 
       this.camera.bottom = -2000;
@@ -212,14 +218,15 @@ export class ThreeRenderer extends Renderer {
       
       // Y-axis lines (horizontal)
       for (const yVal of yTicks) {
-          gridPos[ptr++] = start; gridPos[ptr++] = yVal; gridPos[ptr++] = 0;
-          gridPos[ptr++] = end; gridPos[ptr++] = yVal; gridPos[ptr++] = 0;
+          gridPos[ptr++] = 0; gridPos[ptr++] = yVal; gridPos[ptr++] = 0;
+          gridPos[ptr++] = end - start; gridPos[ptr++] = yVal; gridPos[ptr++] = 0;
       }
       
       // X-axis lines (vertical)
       for (const xVal of xTicks) {
-          gridPos[ptr++] = xVal; gridPos[ptr++] = Y_MIN; gridPos[ptr++] = 0;
-          gridPos[ptr++] = xVal; gridPos[ptr++] = Y_MAX; gridPos[ptr++] = 0;
+          const rx = xVal - start;
+          gridPos[ptr++] = rx; gridPos[ptr++] = Y_MIN; gridPos[ptr++] = 0;
+          gridPos[ptr++] = rx; gridPos[ptr++] = Y_MAX; gridPos[ptr++] = 0;
       }
       
       this.gridLines.geometry.attributes.position.needsUpdate = true;
@@ -282,7 +289,9 @@ export class ThreeRenderer extends Renderer {
       // So camera update should be separate from pure data update.
       
       // Update Buffers
-      for(let i=0; i<this.maxSeries; i++) {
+      this.ensurePoolSize(data.length);
+      
+      for(let i=0; i<this.lines.length; i++) {
           const line = this.lines[i];
           const mesh = this.meshes[i];
 
@@ -293,8 +302,82 @@ export class ThreeRenderer extends Renderer {
           }
 
           const seriesData = data[i]; // Float32Array
-          
-          if (type === 'raw') {
+         
+          if (type === 'sparse') {
+               // Sparse Raw Line (Float64 X + Float32 Y)
+               line.visible = true;
+               mesh.visible = false;
+               
+               const { x: dataX } = dataChunk;
+               const seriesX = dataX[i];
+               const len = seriesData.length;
+               
+               if (len === 0) continue;
+               
+               // Re-allocate if needed? 
+               // We might need MORE points than len due to gap drops (2 extra per gap + 2 edge)
+               // Max possible expansion = len * 3 (worst case every point is a gap)
+               // For now assume buffer is big enough (25k), or resize?
+               // The pool init size was 25000. If we have more points, we need to resize.
+               // TODO: Dynamic resize buffer if len > current capacity
+               
+               const positions = line.geometry.attributes.position.array;
+               let ptr = 0;
+               
+               const gapThreshold = 100; // ms
+               const relativeStart = start; // Subtract this from X to keep precision
+               
+               // Edge Heuristic: Start
+               const firstX = seriesX[0];
+               const distToStart = firstX - start;
+               
+               if (distToStart > gapThreshold) {
+                   // Gap at start -> Start at (0 relative, 0) then (firstX relative, 0)
+                   positions[ptr++] = 0; positions[ptr++] = 0; positions[ptr++] = 0;
+                   positions[ptr++] = firstX - relativeStart; positions[ptr++] = 0; positions[ptr++] = 0;
+               } else {
+                   // Continuity -> Start at (0 relative, firstY)
+                   positions[ptr++] = 0; positions[ptr++] = seriesData[0]; positions[ptr++] = 0;
+               }
+               
+               positions[ptr++] = firstX - relativeStart; positions[ptr++] = seriesData[0]; positions[ptr++] = 0;
+               
+               for(let j=1; j<len; j++) {
+                   const t = seriesX[j];
+                   const prevT = seriesX[j-1];
+                   const dt = t - prevT;
+                   const val = seriesData[j];
+                   
+                   const rx = t - relativeStart;
+                   
+                   if (dt > gapThreshold) {
+                       // Gap!
+                       const prevRx = prevT - relativeStart;
+                       // Drop to zero
+                       positions[ptr++] = prevRx; positions[ptr++] = 0; positions[ptr++] = 0;
+                       positions[ptr++] = rx; positions[ptr++] = 0; positions[ptr++] = 0;
+                       positions[ptr++] = rx; positions[ptr++] = val; positions[ptr++] = 0;
+                   } else {
+                       positions[ptr++] = rx; positions[ptr++] = val; positions[ptr++] = 0;
+                   }
+               }
+               
+               // Edge Heuristic: End
+               const lastX = seriesX[len-1];
+               const distToEnd = end - lastX;
+               if (distToEnd > gapThreshold) {
+                   // Drop to zero at end
+                   positions[ptr++] = lastX - relativeStart; positions[ptr++] = 0; positions[ptr++] = 0;
+                   positions[ptr++] = end - relativeStart; positions[ptr++] = 0; positions[ptr++] = 0;
+               } else {
+                   // Continue
+                   positions[ptr++] = end - relativeStart; positions[ptr++] = seriesData[len-1]; positions[ptr++] = 0;
+               }
+               
+               line.geometry.attributes.position.needsUpdate = true;
+               line.geometry.setDrawRange(0, ptr / 3);
+               
+          } else if (type === 'raw') {
               line.visible = true;
               mesh.visible = false;
               
@@ -305,7 +388,8 @@ export class ThreeRenderer extends Renderer {
               for(let j=0; j<seriesLen; j++) {
                   const x = start + j;
                   const y = seriesData[j];
-                  positions[ptr++] = x; positions[ptr++] = y; positions[ptr++] = 0;
+                  // Relative X
+                  positions[ptr++] = x - start; positions[ptr++] = y; positions[ptr++] = 0;
               }
               
               line.geometry.attributes.position.needsUpdate = true;
@@ -329,6 +413,10 @@ export class ThreeRenderer extends Renderer {
                   const x1 = start + j * step;
                   const x2 = start + (j+1) * step;
                   
+                  // Relative X
+                  const rx1 = x1 - start;
+                  const rx2 = x2 - start;
+                  
                   const min1 = seriesData[j*2];
                   const max1 = seriesData[j*2+1];
                   const range1 = max1 - min1;
@@ -338,23 +426,23 @@ export class ThreeRenderer extends Renderer {
                   const range2 = max2 - min2;
                   
                   // Tri 1: (x1, max1), (x2, max2), (x1, min1)
-                  meshPos[meshPtr++] = x1; meshPos[meshPtr++] = max1; meshPos[meshPtr++] = 0;
+                  meshPos[meshPtr++] = rx1; meshPos[meshPtr++] = max1; meshPos[meshPtr++] = 0;
                   meshRange[rangePtr++] = range1;
                   
-                  meshPos[meshPtr++] = x2; meshPos[meshPtr++] = max2; meshPos[meshPtr++] = 0;
+                  meshPos[meshPtr++] = rx2; meshPos[meshPtr++] = max2; meshPos[meshPtr++] = 0;
                   meshRange[rangePtr++] = range2;
                   
-                  meshPos[meshPtr++] = x1; meshPos[meshPtr++] = min1; meshPos[meshPtr++] = 0;
+                  meshPos[meshPtr++] = rx1; meshPos[meshPtr++] = min1; meshPos[meshPtr++] = 0;
                   meshRange[rangePtr++] = range1;
                   
                   // Tri 2: (x1, min1), (x2, max2), (x2, min2)
-                  meshPos[meshPtr++] = x1; meshPos[meshPtr++] = min1; meshPos[meshPtr++] = 0;
+                  meshPos[meshPtr++] = rx1; meshPos[meshPtr++] = min1; meshPos[meshPtr++] = 0;
                   meshRange[rangePtr++] = range1;
                   
-                  meshPos[meshPtr++] = x2; meshPos[meshPtr++] = max2; meshPos[meshPtr++] = 0;
+                  meshPos[meshPtr++] = rx2; meshPos[meshPtr++] = max2; meshPos[meshPtr++] = 0;
                   meshRange[rangePtr++] = range2;
                   
-                  meshPos[meshPtr++] = x2; meshPos[meshPtr++] = min2; meshPos[meshPtr++] = 0;
+                  meshPos[meshPtr++] = rx2; meshPos[meshPtr++] = min2; meshPos[meshPtr++] = 0;
                   meshRange[rangePtr++] = range2;
               }
               
@@ -369,19 +457,21 @@ export class ThreeRenderer extends Renderer {
               // Trace Top: (x, max)
               for(let j=0; j<binCount; j++) {
                    const x = start + j * step;
+                   const rx = x - start;
                    const max = seriesData[j*2+1];
-                   linePos[linePtr++] = x; linePos[linePtr++] = max; linePos[linePtr++] = 0;
+                   linePos[linePtr++] = rx; linePos[linePtr++] = max; linePos[linePtr++] = 0;
               }
               
               // Trace Bottom (Reverse): (x, min)
               for(let j=binCount-1; j>=0; j--) {
                   const x = start + j * step;
+                  const rx = x - start;
                   const min = seriesData[j*2];
-                  linePos[linePtr++] = x; linePos[linePtr++] = min; linePos[linePtr++] = 0;
+                  linePos[linePtr++] = rx; linePos[linePtr++] = min; linePos[linePtr++] = 0;
               }
               
               // Close loop?
-              linePos[linePtr++] = start;
+              linePos[linePtr++] = 0; // Relative start
               linePos[linePtr++] = seriesData[1]; // First Max
               linePos[linePtr++] = 0;
               
