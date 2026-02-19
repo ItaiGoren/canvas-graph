@@ -19,7 +19,7 @@ async function main() {
     showArea: true,
     lineWidth: 2,
     maxBins: 3000, // Cap for number of bins (dynamic based on width)
-    gapThreshold: 100 // ms
+    sampleRate: 100 // ms
   };
 
   const StressLevels = {
@@ -161,10 +161,11 @@ async function main() {
           requestData();
       });
 
-  folderView.addBinding(config, 'gapThreshold', { min: 10, max: 5000, step: 10 })
+  folderView.addBinding(config, 'sampleRate', { min: 10, max: 5000, step: 10 })
       .on('change', () => {
           // We might need to pass this to renderers
           if (activeRenderer) activeRenderer.render(); 
+          requestData();
       });
 
 
@@ -183,7 +184,8 @@ async function main() {
     // We calculate lod (chunk size) to aim for 'targetBins' total bins in the current view
     const lod = Math.max(1, Math.ceil(range.range / targetBins)); 
     
-    const data = await server.getData(range.start, range.end, lod);
+    // Pass sampleRate for correct aggregation of sparse data
+    const data = await server.getData(range.start, range.end, lod, config.sampleRate);
     currentDataChunk = data; // Store for tooltip
     
     if (activeRenderer) {

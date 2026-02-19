@@ -26,6 +26,10 @@ export class ThreeRenderer extends Renderer {
     this.group = new THREE.Group();
     this.scene.add(this.group);
     
+    // For sparse data: store the reference start time so we can offset the group
+    this.dataStartOffset = 0;
+    this.isSparseData = false;
+    
     // Grid Lines
     const gridGeo = new THREE.BufferGeometry();
     const gridPos = new Float32Array(1000 * 3); // Max 500 lines (1000 vertices)
@@ -155,18 +159,13 @@ export class ThreeRenderer extends Renderer {
   }
 
   updateCamera() {
-      // Logic handled in render or setData via camera properties?
-      // Actually, we want the camera to map exactly to the data coordinates:
-      // X: viewport.start to viewport.end
-      // Y: -500 to 500 (approx random walk range)
-      
-      // X: 0 to (end-start) [Relative Mode]
-      // Y: -500 to 500 (approx random walk range)
-      
       const { start, end } = this.viewport.getRange();
-      this.camera.left = 0; // Relative start
-      this.camera.right = end - start; // Relative width
-      // We need a fixed Y scale or dynamic? Fixed for now.
+      
+      // Always use absolute coordinates — data vertices are always absolute
+      this.camera.left = start;
+      this.camera.right = end;
+      this.group.position.x = 0;
+      
       this.camera.top = 2000; 
       this.camera.bottom = -2000;
       this.camera.updateProjectionMatrix();
@@ -216,18 +215,17 @@ export class ThreeRenderer extends Renderer {
       const gridPos = this.gridLines.geometry.attributes.position.array;
       let ptr = 0;
       
-      // Y-axis lines (horizontal)
-      for (const yVal of yTicks) {
-          gridPos[ptr++] = 0; gridPos[ptr++] = yVal; gridPos[ptr++] = 0;
-          gridPos[ptr++] = end - start; gridPos[ptr++] = yVal; gridPos[ptr++] = 0;
-      }
-      
-      // X-axis lines (vertical)
-      for (const xVal of xTicks) {
-          const rx = xVal - start;
-          gridPos[ptr++] = rx; gridPos[ptr++] = Y_MIN; gridPos[ptr++] = 0;
-          gridPos[ptr++] = rx; gridPos[ptr++] = Y_MAX; gridPos[ptr++] = 0;
-      }
+       // Y-axis lines (horizontal)
+       for (const yVal of yTicks) {
+           gridPos[ptr++] = start; gridPos[ptr++] = yVal; gridPos[ptr++] = 0;
+           gridPos[ptr++] = end; gridPos[ptr++] = yVal; gridPos[ptr++] = 0;
+       }
+       
+       // X-axis lines (vertical)
+       for (const xVal of xTicks) {
+           gridPos[ptr++] = xVal; gridPos[ptr++] = Y_MIN; gridPos[ptr++] = 0;
+           gridPos[ptr++] = xVal; gridPos[ptr++] = Y_MAX; gridPos[ptr++] = 0;
+       }
       
       this.gridLines.geometry.attributes.position.needsUpdate = true;
       this.gridLines.geometry.setDrawRange(0, ptr / 3);
@@ -282,6 +280,12 @@ export class ThreeRenderer extends Renderer {
       
       const { type, data, start, end } = dataChunk;
       
+      // Track if this is sparse data for camera mode
+      this.isSparseData = (type === 'sparse' || type === 'sparse-aggregated');
+      if (this.isSparseData) {
+          this.dataStartOffset = start; // Store the reference offset
+      }
+      
       // Update camera horizontal bounds
       // NOTE: This might ideally happen every frame in render() if we want smooth pan,
       // but setData is called when data arrives.
@@ -324,23 +328,23 @@ export class ThreeRenderer extends Renderer {
                const positions = line.geometry.attributes.position.array;
                let ptr = 0;
                
-               const gapThreshold = 100; // ms
-               const relativeStart = start; // Subtract this from X to keep precision
+                const gapThreshold = dataChunk.sampleRate || 100; // ms
+                const absoluteStart = start; // Use absolute coordinates for vertices
                
                // Edge Heuristic: Start
                const firstX = seriesX[0];
-               const distToStart = firstX - start;
+               const distToStart = firstX - absoluteStart;
                
                if (distToStart > gapThreshold) {
-                   // Gap at start -> Start at (0 relative, 0) then (firstX relative, 0)
-                   positions[ptr++] = 0; positions[ptr++] = 0; positions[ptr++] = 0;
-                   positions[ptr++] = firstX - relativeStart; positions[ptr++] = 0; positions[ptr++] = 0;
+                   // Gap at start -> Start at (absoluteStart, 0) then (firstX, 0)
+                   positions[ptr++] = absoluteStart; positions[ptr++] = 0; positions[ptr++] = 0;
+                   positions[ptr++] = firstX; positions[ptr++] = 0; positions[ptr++] = 0;
                } else {
-                   // Continuity -> Start at (0 relative, firstY)
-                   positions[ptr++] = 0; positions[ptr++] = seriesData[0]; positions[ptr++] = 0;
+                   // Continuity -> Start at (absoluteStart, firstY)
+                   positions[ptr++] = absoluteStart; positions[ptr++] = seriesData[0]; positions[ptr++] = 0;
                }
                
-               positions[ptr++] = firstX - relativeStart; positions[ptr++] = seriesData[0]; positions[ptr++] = 0;
+               positions[ptr++] = firstX; positions[ptr++] = seriesData[0]; positions[ptr++] = 0;
                
                for(let j=1; j<len; j++) {
                    const t = seriesX[j];
@@ -348,17 +352,17 @@ export class ThreeRenderer extends Renderer {
                    const dt = t - prevT;
                    const val = seriesData[j];
                    
-                   const rx = t - relativeStart;
+                   const ax = t; // Absolute X
                    
                    if (dt > gapThreshold) {
                        // Gap!
-                       const prevRx = prevT - relativeStart;
+                       const prevAx = prevT; // Absolute X
                        // Drop to zero
-                       positions[ptr++] = prevRx; positions[ptr++] = 0; positions[ptr++] = 0;
-                       positions[ptr++] = rx; positions[ptr++] = 0; positions[ptr++] = 0;
-                       positions[ptr++] = rx; positions[ptr++] = val; positions[ptr++] = 0;
+                       positions[ptr++] = prevAx; positions[ptr++] = 0; positions[ptr++] = 0;
+                       positions[ptr++] = ax; positions[ptr++] = 0; positions[ptr++] = 0;
+                       positions[ptr++] = ax; positions[ptr++] = val; positions[ptr++] = 0;
                    } else {
-                       positions[ptr++] = rx; positions[ptr++] = val; positions[ptr++] = 0;
+                       positions[ptr++] = ax; positions[ptr++] = val; positions[ptr++] = 0;
                    }
                }
                
@@ -367,11 +371,11 @@ export class ThreeRenderer extends Renderer {
                const distToEnd = end - lastX;
                if (distToEnd > gapThreshold) {
                    // Drop to zero at end
-                   positions[ptr++] = lastX - relativeStart; positions[ptr++] = 0; positions[ptr++] = 0;
-                   positions[ptr++] = end - relativeStart; positions[ptr++] = 0; positions[ptr++] = 0;
+                   positions[ptr++] = lastX; positions[ptr++] = 0; positions[ptr++] = 0;
+                   positions[ptr++] = end; positions[ptr++] = 0; positions[ptr++] = 0;
                } else {
                    // Continue
-                   positions[ptr++] = end - relativeStart; positions[ptr++] = seriesData[len-1]; positions[ptr++] = 0;
+                   positions[ptr++] = end; positions[ptr++] = seriesData[len-1]; positions[ptr++] = 0;
                }
                
                line.geometry.attributes.position.needsUpdate = true;
@@ -388,8 +392,7 @@ export class ThreeRenderer extends Renderer {
               for(let j=0; j<seriesLen; j++) {
                   const x = start + j;
                   const y = seriesData[j];
-                  // Relative X
-                  positions[ptr++] = x - start; positions[ptr++] = y; positions[ptr++] = 0;
+                  positions[ptr++] = x; positions[ptr++] = y; positions[ptr++] = 0;
               }
               
               line.geometry.attributes.position.needsUpdate = true;
@@ -403,80 +406,86 @@ export class ThreeRenderer extends Renderer {
               const step = dataChunk.step || 1;
               const binCount = seriesData.length / 2;
               
-              // 1. Update MESH (Area Fill)
+              // 1. Update MESH (Area Fill) - Stepped Quads
               const meshPos = mesh.geometry.attributes.position.array;
               const meshRange = mesh.geometry.attributes.aRange.array;
               let meshPtr = 0;
               let rangePtr = 0;
               
-              for(let j=0; j<binCount - 1; j++) {
+              for(let j=0; j<binCount; j++) {
                   const x1 = start + j * step;
                   const x2 = start + (j+1) * step;
                   
-                  // Relative X
-                  const rx1 = x1 - start;
-                  const rx2 = x2 - start;
+                  // Use bin values for the whole width [x1, x2]
+                  const min = seriesData[j*2];
+                  const max = seriesData[j*2+1];
+                  const range = max - min;
                   
-                  const min1 = seriesData[j*2];
-                  const max1 = seriesData[j*2+1];
-                  const range1 = max1 - min1;
+                  // Quad 1: Top (x1, max) -> (x2, max) -> (x1, min)
+                  // Note: To make a full quad we use 2 tris
                   
-                  const min2 = seriesData[(j+1)*2];
-                  const max2 = seriesData[(j+1)*2+1];
-                  const range2 = max2 - min2;
+                  // Tri 1: (x1, max), (x2, max), (x1, min)
+                  meshPos[meshPtr++] = x1; meshPos[meshPtr++] = max; meshPos[meshPtr++] = 0;
+                  meshRange[rangePtr++] = range;
                   
-                  // Tri 1: (x1, max1), (x2, max2), (x1, min1)
-                  meshPos[meshPtr++] = rx1; meshPos[meshPtr++] = max1; meshPos[meshPtr++] = 0;
-                  meshRange[rangePtr++] = range1;
+                  meshPos[meshPtr++] = x2; meshPos[meshPtr++] = max; meshPos[meshPtr++] = 0;
+                  meshRange[rangePtr++] = range;
                   
-                  meshPos[meshPtr++] = rx2; meshPos[meshPtr++] = max2; meshPos[meshPtr++] = 0;
-                  meshRange[rangePtr++] = range2;
+                  meshPos[meshPtr++] = x1; meshPos[meshPtr++] = min; meshPos[meshPtr++] = 0;
+                  meshRange[rangePtr++] = range;
                   
-                  meshPos[meshPtr++] = rx1; meshPos[meshPtr++] = min1; meshPos[meshPtr++] = 0;
-                  meshRange[rangePtr++] = range1;
+                  // Tri 2: (x1, min), (x2, max), (x2, min)
+                  meshPos[meshPtr++] = x1; meshPos[meshPtr++] = min; meshPos[meshPtr++] = 0;
+                  meshRange[rangePtr++] = range;
                   
-                  // Tri 2: (x1, min1), (x2, max2), (x2, min2)
-                  meshPos[meshPtr++] = rx1; meshPos[meshPtr++] = min1; meshPos[meshPtr++] = 0;
-                  meshRange[rangePtr++] = range1;
+                  meshPos[meshPtr++] = x2; meshPos[meshPtr++] = max; meshPos[meshPtr++] = 0;
+                  meshRange[rangePtr++] = range;
                   
-                  meshPos[meshPtr++] = rx2; meshPos[meshPtr++] = max2; meshPos[meshPtr++] = 0;
-                  meshRange[rangePtr++] = range2;
-                  
-                  meshPos[meshPtr++] = rx2; meshPos[meshPtr++] = min2; meshPos[meshPtr++] = 0;
-                  meshRange[rangePtr++] = range2;
+                  meshPos[meshPtr++] = x2; meshPos[meshPtr++] = min; meshPos[meshPtr++] = 0;
+                  meshRange[rangePtr++] = range;
               }
               
               mesh.geometry.attributes.position.needsUpdate = true;
               mesh.geometry.attributes.aRange.needsUpdate = true;
-              mesh.geometry.setDrawRange(0, (binCount - 1) * 6);
+              // Each bin contributes 6 vertices (2 tris) -> binCount * 6
+              mesh.geometry.setDrawRange(0, binCount * 6);
               
-              // 2. Update LINE (Perimeter Trace for 1px crispness)
+              // 2. Update LINE (Stepped Outline)
+              // We draw: (x, y) -> (x+step, y) for each bin
+              // Connections between bins happen automatically via LineStrip
+              
               const linePos = line.geometry.attributes.position.array;
               let linePtr = 0;
               
-              // Trace Top: (x, max)
+              // Trace Top: (x, max) -> (x+step, max)
               for(let j=0; j<binCount; j++) {
                    const x = start + j * step;
-                   const rx = x - start;
+                   const nextX = start + (j+1) * step;
                    const max = seriesData[j*2+1];
-                   linePos[linePtr++] = rx; linePos[linePtr++] = max; linePos[linePtr++] = 0;
+                   
+                   linePos[linePtr++] = x; linePos[linePtr++] = max; linePos[linePtr++] = 0;
+                   linePos[linePtr++] = nextX; linePos[linePtr++] = max; linePos[linePtr++] = 0;
               }
               
-              // Trace Bottom (Reverse): (x, min)
+              // Trace Bottom (Reverse): (x+step, min) -> (x, min)
               for(let j=binCount-1; j>=0; j--) {
                   const x = start + j * step;
-                  const rx = x - start;
+                  const nextX = start + (j+1) * step;
                   const min = seriesData[j*2];
-                  linePos[linePtr++] = rx; linePos[linePtr++] = min; linePos[linePtr++] = 0;
+                  
+                  linePos[linePtr++] = nextX; linePos[linePtr++] = min; linePos[linePtr++] = 0;
+                  linePos[linePtr++] = x; linePos[linePtr++] = min; linePos[linePtr++] = 0;
               }
               
               // Close loop?
-              linePos[linePtr++] = 0; // Relative start
+              // Connect last point (start, min[0]) to first point (start, max[0])
+              linePos[linePtr++] = start;
               linePos[linePtr++] = seriesData[1]; // First Max
               linePos[linePtr++] = 0;
               
               line.geometry.attributes.position.needsUpdate = true;
-              line.geometry.setDrawRange(0, binCount * 2 + 1);
+              // Total points: (binCount * 2 top) + (binCount * 2 bottom) + 1 closure
+              line.geometry.setDrawRange(0, binCount * 4 + 1);
           }
       }
   }

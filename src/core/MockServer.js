@@ -186,10 +186,10 @@ export class MockServer {
   }
 
   // Simulate network request
-  async getData(startIndex, endIndex, lodLevel = 1) {
+  async getData(startIndex, endIndex, lodLevel = 1, sampleRate = 100) {
     return new Promise((resolve) => {
       setTimeout(() => {
-        resolve(this._processRequest(startIndex, endIndex, lodLevel));
+        resolve(this._processRequest(startIndex, endIndex, lodLevel, sampleRate));
       }, this.latency);
     });
   }
@@ -205,7 +205,7 @@ export class MockServer {
       return l; // Returns split point
   }
 
-  _processRequest(startArg, endArg, lodLevel) {
+  _processRequest(startArg, endArg, lodLevel, sampleRate = 100) {
       if (!this.dataX || this.dataX.length === 0) {
           // Fallback for non-sparse types (assume index = time)
           const start = Math.max(0, Math.floor(startArg));
@@ -232,28 +232,33 @@ export class MockServer {
       let endIndex = this._binarySearch(masterX, endTime);
       
       // Clamp
-      startIndex = Math.max(0, Math.min(startIndex, this.nPoints));
-      endIndex = Math.max(0, Math.min(endIndex, this.nPoints));
+      // Clamp start/end indices normally
+      // But for drawing lines, we need context (prev point/next point)
+      // so lines connect across the viewport boundary
+      let rawStartIndex = Math.max(0, startIndex - 1);
+      let rawEndIndex = Math.min(this.nPoints, endIndex + 1);
       
-      // Raw Return
-      if (lodLevel === 1) {
+      // Raw Return if LOD is 1 OR if requested bin size is finer than our sample rate
+      // (This avoids blocky aggregation when zooming in past the sample resolution)
+      if (lodLevel === 1 || lodLevel < sampleRate) {
           for(let i=0; i<this.nSeries; i++) {
-              resultData.push(this.data[i].slice(startIndex, endIndex));
-              resultX.push(this.dataX[i].slice(startIndex, endIndex));
+              resultData.push(this.data[i].slice(rawStartIndex, rawEndIndex));
+              resultX.push(this.dataX[i].slice(rawStartIndex, rawEndIndex));
           }
-          return { type: 'sparse', data: resultData, x: resultX, start: startTime, end: endTime };
+          return { type: 'sparse', data: resultData, x: resultX, start: startTime, end: endTime, sampleRate };
       }
       
       // Time-Based Aggregation
-      // Target: (endTime - startTime) / lodLevel bins? 
-      // Actually lodLevel usually means "pixels per bin" or "points per bin".
-      // Let's interpret 'lodLevel' as 'ms per bin'.
-      
+      // Use lodLevel directly - we switched to Raw for the "finer than sampleRate" case
       const binSizeMs = lodLevel;
-      const binCount = Math.ceil((endTime - startTime) / binSizeMs);
+      
+      // Align start to the global grid to prevent shimmering during pan
+      const alignedStartTime = Math.floor(startTime / binSizeMs) * binSizeMs;
+      // We might need an extra bin if alignment pushed us back
+      const binCount = Math.ceil((endTime - alignedStartTime) / binSizeMs);
       
       const resultAgg = [];
-      // X for aggregation? We can just send start/end/step.
+      const resultStart = alignedStartTime; // Return the actual aligned start
       
       for(let i=0; i<this.nSeries; i++) {
           const rawY = this.data[i];
@@ -261,41 +266,59 @@ export class MockServer {
           
           const bins = []; // Each bin: [min, max] or [0, 0] (gap)
           
-          let currentPtr = startIndex;
+          let currentPtr = this._binarySearch(rawX, alignedStartTime); 
           
           for(let b=0; b<binCount; b++) {
-              const binStartT = startTime + b * binSizeMs;
+              const binStartT = alignedStartTime + b * binSizeMs;
               const binEndT = binStartT + binSizeMs;
               
               let min = Infinity;
               let max = -Infinity;
               let hasPoints = false;
-              
+              let prevPointT = -Infinity;
+              let gapDetected = false;
+
               // Scan points in this time window
               while(currentPtr < rawX.length && rawX[currentPtr] < binEndT) {
                   // Only include if >= binStartT
                   if(rawX[currentPtr] >= binStartT) {
+                      const t = rawX[currentPtr];
                       const val = rawY[currentPtr];
+                      
                       if (val < min) min = val;
                       if (val > max) max = val;
                       hasPoints = true;
+                      
+                      // Check for intra-bin gap
+                      if (prevPointT > -Infinity && (t - prevPointT) > sampleRate) {
+                          gapDetected = true;
+                      }
+                      prevPointT = t;
                   }
                   currentPtr++;
               }
               
               if (hasPoints) {
+                  // If we found a gap inside the bin, force min/max to touch zero
+                  if (gapDetected) {
+                      if (0 < min) min = 0;
+                      if (0 > max) max = 0;
+                  }
                   bins.push(min, max);
+                  
+                  // Update last seen point for next bin's reference
+                  if (currentPtr > 0) {
+                      prevPointT = rawX[currentPtr - 1];
+                  }
               } else {
-                  // Gap / Empty Bin
-                  // Push marker? Or just 0,0?
-                  // Providing 0,0 is easiest visually
+                  // Empty Bin -> True Gap (since binSize >= sampleRate)
                   bins.push(0, 0); 
               }
           }
           resultAgg.push(new Float32Array(bins));
       }
       
-      return { type: 'sparse-aggregated', data: resultAgg, start: startTime, end: endTime, step: binSizeMs };
+      return { type: 'sparse-aggregated', data: resultAgg, start: resultStart, end: endTime, step: binSizeMs, sampleRate };
   }
 
   // Original Logic renamed
