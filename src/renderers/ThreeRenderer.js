@@ -171,37 +171,7 @@ export class ThreeRenderer extends Renderer {
       this.camera.updateProjectionMatrix();
   }
   
-  // Helper: Calculate nice tick values (same as CanvasRenderer)
-  calculateNiceTicks(min, max, targetCount = 8) {
-      const range = max - min;
-      if (range === 0) return [min];
-      
-      const rawStep = range / targetCount;
-      const magnitude = Math.pow(10, Math.floor(Math.log10(rawStep)));
-      const normalized = rawStep / magnitude;
-      
-      let niceStep;
-      if (normalized < 1.5) niceStep = 1;
-      else if (normalized < 3) niceStep = 2;
-      else if (normalized < 7) niceStep = 5;
-      else niceStep = 10;
-      
-      niceStep *= magnitude;
-      
-      const start = Math.ceil(min / niceStep) * niceStep;
-      const ticks = [];
-      for (let val = start; val <= max; val += niceStep) {
-          ticks.push(val);
-      }
-      return ticks;
-  }
-  
-  formatYLabel(value) {
-      const abs = Math.abs(value);
-      if (abs >= 1e6) return (value / 1e6).toFixed(1) + 'M';
-      if (abs >= 1e3) return (value / 1e3).toFixed(1) + 'K';
-      return value.toFixed(0);
-  }
+
   
   updateGrid() {
       const { start, end } = this.viewport.getRange();
@@ -307,97 +277,79 @@ export class ThreeRenderer extends Renderer {
 
           const seriesData = data[i]; // Float32Array
          
-          if (type === 'sparse') {
-               // Sparse Raw Line (Float64 X + Float32 Y)
+          if (type === 'sparse' || type === 'raw') {
+               // Unified Line Logic
                line.visible = true;
                mesh.visible = false;
                
+               const isSparse = (type === 'sparse');
                const { x: dataX } = dataChunk;
-               const seriesX = dataX[i];
+               const seriesX = isSparse ? dataX[i] : null; // Float64Array for sparse
                const len = seriesData.length;
                
                if (len === 0) continue;
-               
-               // Re-allocate if needed? 
-               // We might need MORE points than len due to gap drops (2 extra per gap + 2 edge)
-               // Max possible expansion = len * 3 (worst case every point is a gap)
-               // For now assume buffer is big enough (25k), or resize?
-               // The pool init size was 25000. If we have more points, we need to resize.
-               // TODO: Dynamic resize buffer if len > current capacity
-               
+
+               // Note on Raw: seriesX matches start..start+len
+               // We can simulate seriesX access or just use index
+
                const positions = line.geometry.attributes.position.array;
                let ptr = 0;
                
-                const gapThreshold = dataChunk.sampleRate || 100; // ms
-                const absoluteStart = start; // Use absolute coordinates for vertices
-               
+               const gapThreshold = isSparse ? (dataChunk.sampleRate || 100) : Infinity; // Gap impossible in raw (unless NaN?)
+               const absoluteStart = start; 
+
+               // --- Helper to get X at index j ---
+               const getX = isSparse 
+                    ? (j) => seriesX[j]
+                    : (j) => start + j; // Raw: X is simply index + offset
+
                // Edge Heuristic: Start
-               const firstX = seriesX[0];
+               const firstX = getX(0);
                const distToStart = firstX - absoluteStart;
                
                if (distToStart > gapThreshold) {
-                   // Gap at start -> Start at (absoluteStart, 0) then (firstX, 0)
                    positions[ptr++] = absoluteStart; positions[ptr++] = 0; positions[ptr++] = 0;
                    positions[ptr++] = firstX; positions[ptr++] = 0; positions[ptr++] = 0;
                } else {
-                   // Continuity -> Start at (absoluteStart, firstY)
+                   // Ensure we start from absoluteStart for continuity if close enough
+                   // For Raw, firstX == absoluteStart usually (if chunk aligns), so this is just (start, y0)
                    positions[ptr++] = absoluteStart; positions[ptr++] = seriesData[0]; positions[ptr++] = 0;
                }
                
                positions[ptr++] = firstX; positions[ptr++] = seriesData[0]; positions[ptr++] = 0;
                
                for(let j=1; j<len; j++) {
-                   const t = seriesX[j];
-                   const prevT = seriesX[j-1];
+                   const t = getX(j);
+                   const prevT = getX(j-1);
                    const dt = t - prevT;
                    const val = seriesData[j];
                    
-                   const ax = t; // Absolute X
-                   
+                   // Gap check only relevant for Sparse, but logic holds if threshold is Infinity
                    if (dt > gapThreshold) {
                        // Gap!
-                       const prevAx = prevT; // Absolute X
+                       const prevAx = prevT; 
                        // Drop to zero
                        positions[ptr++] = prevAx; positions[ptr++] = 0; positions[ptr++] = 0;
-                       positions[ptr++] = ax; positions[ptr++] = 0; positions[ptr++] = 0;
-                       positions[ptr++] = ax; positions[ptr++] = val; positions[ptr++] = 0;
+                       positions[ptr++] = t; positions[ptr++] = 0; positions[ptr++] = 0;
+                       positions[ptr++] = t; positions[ptr++] = val; positions[ptr++] = 0;
                    } else {
-                       positions[ptr++] = ax; positions[ptr++] = val; positions[ptr++] = 0;
+                       positions[ptr++] = t; positions[ptr++] = val; positions[ptr++] = 0;
                    }
                }
                
                // Edge Heuristic: End
-               const lastX = seriesX[len-1];
+               const lastX = getX(len-1);
                const distToEnd = end - lastX;
                if (distToEnd > gapThreshold) {
-                   // Drop to zero at end
                    positions[ptr++] = lastX; positions[ptr++] = 0; positions[ptr++] = 0;
                    positions[ptr++] = end; positions[ptr++] = 0; positions[ptr++] = 0;
                } else {
-                   // Continue
                    positions[ptr++] = end; positions[ptr++] = seriesData[len-1]; positions[ptr++] = 0;
                }
                
                line.geometry.attributes.position.needsUpdate = true;
                line.geometry.setDrawRange(0, ptr / 3);
                
-          } else if (type === 'raw') {
-              line.visible = true;
-              mesh.visible = false;
-              
-              const positions = line.geometry.attributes.position.array;
-              let ptr = 0;
-              const seriesLen = seriesData.length;
-              
-              for(let j=0; j<seriesLen; j++) {
-                  const x = start + j;
-                  const y = seriesData[j];
-                  positions[ptr++] = x; positions[ptr++] = y; positions[ptr++] = 0;
-              }
-              
-              line.geometry.attributes.position.needsUpdate = true;
-              line.geometry.setDrawRange(0, seriesLen);
-              
           } else {
               // Aggregated: Area Fill + Perimeter Trace
               line.visible = true;
@@ -509,7 +461,7 @@ export class ThreeRenderer extends Renderer {
 
 
   setMarkers(markers) {
-      this.markersConfig = markers || [];
+      super.setMarkers(markers);
       this.updateMarkers();
   }
 

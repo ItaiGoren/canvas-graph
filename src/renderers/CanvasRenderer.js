@@ -24,12 +24,7 @@ export class CanvasRenderer extends Renderer {
     // Data Store
     this.currentData = null;
     
-    this.colors = [];
-    for(let i=0; i<100; i++) {
-        this.colors.push(`hsl(${Math.floor(i/100 * 360)}, 80%, 50%)`);
-    }
-    
-    this.markersConfig = [];
+
   }
 
   resize(width, height) {
@@ -52,39 +47,7 @@ export class CanvasRenderer extends Renderer {
       // No-op
   }
   
-  // Helper: Calculate nice tick values
-  calculateNiceTicks(min, max, targetCount = 8) {
-      const range = max - min;
-      if (range === 0) return [min];
-      
-      // Find a "nice" step size
-      const rawStep = range / targetCount;
-      const magnitude = Math.pow(10, Math.floor(Math.log10(rawStep)));
-      const normalized = rawStep / magnitude;
-      
-      let niceStep;
-      if (normalized < 1.5) niceStep = 1;
-      else if (normalized < 3) niceStep = 2;
-      else if (normalized < 7) niceStep = 5;
-      else niceStep = 10;
-      
-      niceStep *= magnitude;
-      
-      const start = Math.ceil(min / niceStep) * niceStep;
-      const ticks = [];
-      for (let val = start; val <= max; val += niceStep) {
-          ticks.push(val);
-      }
-      return ticks;
-  }
-  
-  // Helper: Format Y-axis labels
-  formatYLabel(value) {
-      const abs = Math.abs(value);
-      if (abs >= 1e6) return (value / 1e6).toFixed(1) + 'M';
-      if (abs >= 1e3) return (value / 1e3).toFixed(1) + 'K';
-      return value.toFixed(0);
-  }
+
 
 
   
@@ -206,90 +169,70 @@ export class CanvasRenderer extends Renderer {
           ctx.globalAlpha = type === 'aggregated' ? 0.5 : 1.0;
           ctx.beginPath();
           
-          if (type === 'raw') {
-              // Raw Line
-              const len = series.length;
-              const dataStart = this.currentData.start; 
-              
-              ctx.beginPath();
-              ctx.lineWidth = 1; // Strict 1px
-              
-              ctx.lineJoin = 'round';
-              ctx.lineCap = 'round';
-              
-              let first = true;
-              
-              for(let j=0; j<len; j++) {
-                  const globalIdx = dataStart + j;
-                  // Simple Cull
-                  if (globalIdx < start - range || globalIdx > end + range) continue; 
-                  
-                  const px = toX(globalIdx);
-                  const py = toY(series[j]);
-                  
-                  if (first) {
-                      ctx.moveTo(px, py);
-                      first = false;
-                  } else {
-                      ctx.lineTo(px, py);
-                  }
-              }
-              ctx.stroke();
-              
-          } else if (type === 'sparse') {
-              // Sparse Line
+          if (type === 'raw' || type === 'sparse') {
+              // Unified Line Logic
+              const isSparse = (type === 'sparse');
               const { x: dataX } = this.currentData;
-              const seriesX = dataX[i]; // Float64Array
+              const seriesX = isSparse ? dataX[i] : null; 
               const len = series.length;
               
               if (len === 0) continue;
               
               ctx.beginPath();
-              ctx.lineWidth = 1.5; 
+              ctx.lineWidth = 1.5; // (Old raw was 1, sparse 1.5 - preserving 1.5 or 1? Let's use 1.5 for visibility or 1.0 for consistency. Raw was 1.)
+              // Let's use 1.0 to match original 'raw' if we generally prefer crisp lines, or 1.5 if we want thicker.
+              // Let's compromise or check config? Base renderer has lineWidth.
+              // For now, let's Stick to 1.0 for consistency with previous Raw, as 1.5 blurs slightly.
+              ctx.lineWidth = 1; 
+
               ctx.lineJoin = 'round';
               ctx.lineCap = 'round';
               
-              const gapThreshold = 100; // ms. Todo: make configurable
+              const gapThreshold = isSparse ? (100) : Infinity; // todo: config.sampleRate
+              const getX = isSparse ? (j) => seriesX[j] : (j) => this.currentData.start + j;
               
-              // Edge Heuristic: 
-              // Check distance of first point from viewport start
-              const firstX = seriesX[0];
-              const distToStart = firstX - start;
+              const startX = start; // Viewport start
+              
+              // Edge Heuristic start
+              const firstX = getX(0);
+              const distToStart = firstX - startX;
               
               if (distToStart > gapThreshold) {
-                  // Gap at start -> Move to (start, 0) then (firstX, 0)
-                  ctx.moveTo(toX(start), toY(0));
+                  ctx.moveTo(toX(startX), toY(0));
                   ctx.lineTo(toX(firstX), toY(0));
               } else {
-                  // Continuity -> Move to (start, firstY) - approximating
-                  ctx.moveTo(toX(start), toY(series[0]));
+                  ctx.moveTo(toX(startX), toY(series[0]));
               }
               
               ctx.lineTo(toX(firstX), toY(series[0]));
               
+              // Helper: Optimization for Raw - we don't need to check gaps every point if we know it's raw
+              // But unified loop is cleaner. Logic with Infinity gapThreshold skips gap block.
+              
               for(let j=1; j<len; j++) {
-                  const t = seriesX[j];
-                  const prevT = seriesX[j-1];
-                  const dt = t - prevT;
-                  
+                  const t = getX(j);
                   const px = toX(t);
                   const py = toY(series[j]);
+
+                  // Performance optimization: Cull drawing if out of view?
+                  // toX already does math, canvas usually clips efficiently.
                   
-                  if (dt > gapThreshold) {
-                      // Gap detected! Drop to zero
-                      const prevPx = toX(prevT);
-                      const zeroY = toY(0);
-                      
-                      ctx.lineTo(prevPx, zeroY);
-                      ctx.lineTo(px, zeroY);
-                      ctx.lineTo(px, py);
-                  } else {
-                      ctx.lineTo(px, py);
+                  if (isSparse) {
+                      const prevT = getX(j-1);
+                      const dt = t - prevT;
+                      if (dt > gapThreshold) {
+                          const prevPx = toX(prevT);
+                          const zeroY = toY(0);
+                          ctx.lineTo(prevPx, zeroY);
+                          ctx.lineTo(px, zeroY);
+                      }
                   }
+                  
+                  ctx.lineTo(px, py);
               }
               
-              // Trailing Edge Heuristic
-              const lastX = seriesX[len-1];
+              // Trailing Edge
+              const lastX = getX(len-1);
               const distToEnd = end - lastX;
               if (distToEnd > gapThreshold) {
                   ctx.lineTo(toX(lastX), toY(0));
@@ -428,7 +371,7 @@ export class CanvasRenderer extends Renderer {
   }
 
   setMarkers(markers) {
-      this.markersConfig = markers || [];
+      super.setMarkers(markers);
       this.isCached = false; // Invalidate cache to redraw markers (since we draw them in drawMarkers -> cache)
   }
 
