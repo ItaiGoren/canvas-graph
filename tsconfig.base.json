@@ -1,0 +1,36 @@
+{
+  "compileOnSave": false,
+  "compilerOptions": {
+    "moduleResolution": "bundler",
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "target": "es2022",
+    "module": "es2022",
+    "lib": [
+      "dom",
+      "es2022"
+    ],
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@canvas-graph/engine": [
+        "libs/engine/src/index.ts"
+      ],
+      "@canvas-graph/ng-canvas-graph": [
+        "libs/ng-canvas-graph/src/index.ts"
+      ],
+      "@canvas-graph/mock-server": [
+        "libs/mock-server/src/index.ts"
+      ],
+      "@canvas-graph/old-core/*": [
+        "src/core/*"
+      ],
+      "@canvas-graph/old-renderers/*": [
+        "src/renderers/*"
+      ]
+    }
+  },
+  "exclude": [
+    "node_modules"
+  ]
+}

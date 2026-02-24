@@ -1,0 +1,14 @@
+ <div class="app-container">
+      <div class="toolbar">
+        <h3>Canvas Graph — Angular Demo</h3>
+        <div class="controls">
+          <button (click)="regenerateData()">Generate Data</button>
+          <button (click)="setMode('pan')" [class.active]="currentMode === 'pan'">Pan</button>
+          <button (click)="setMode('box-zoom')" [class.active]="currentMode === 'box-zoom'">Box Zoom</button>
+          <button (click)="setMode('x-zoom')" [class.active]="currentMode === 'x-zoom'">X Zoom</button>
+        </div>
+      </div>
+      <div class="graph-area">
+        <app-graph-view #graphView></app-graph-view>
+      </div>
+    </div>
