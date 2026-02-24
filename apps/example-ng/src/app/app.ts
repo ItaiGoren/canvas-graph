@@ -14,6 +14,9 @@ import { InteractionMode } from '@canvas-graph/engine';
 export class App implements AfterViewInit {
   @ViewChild('graphView') graphView!: GraphViewComponent;
   
+  dataTypes = ['random-walk', 'variable-sine', 'pulse-wave', 'multi-wave', 'sparse-sine'];
+  currentDataType = 'random-walk';
+  
   currentMode: 'pan' | 'box-zoom' | 'x-zoom' = 'pan';
   private server: MockServer;
 
@@ -23,11 +26,14 @@ export class App implements AfterViewInit {
 
   async ngAfterViewInit() {
     await this.server.init();
-    await this.regenerateData();
+    await this.regenerateData(this.currentDataType);
   }
 
-  async regenerateData() {
-    await this.server.generateData('random-walk');
+  async regenerateData(type?: string) {
+    if (type) {
+      this.currentDataType = type;
+    }
+    await this.server.generateData(this.currentDataType);
     const data = await this.server.getData(0, this.server.nPoints, 1, 100);
     this.graphView.setData(data);
     this.graphView.setRange(0, this.server.nPoints);

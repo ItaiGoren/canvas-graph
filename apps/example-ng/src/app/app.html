@@ -1,14 +1,14 @@
  <div class="app-container">
-      <div class="toolbar">
-        <h3>Canvas Graph — Angular Demo</h3>
-        <div class="controls">
-          <button (click)="regenerateData()">Generate Data</button>
-          <button (click)="setMode('pan')" [class.active]="currentMode === 'pan'">Pan</button>
-          <button (click)="setMode('box-zoom')" [class.active]="currentMode === 'box-zoom'">Box Zoom</button>
-          <button (click)="setMode('x-zoom')" [class.active]="currentMode === 'x-zoom'">X Zoom</button>
+      <div class="centered-content">
+        <div class="data-selector">
+          <label *ngFor="let type of dataTypes" class="radio-label">
+            <input type="radio" name="dataType" [value]="type" [checked]="currentDataType === type" (change)="regenerateData(type)">
+            <span class="radio-custom"></span>
+            <span class="radio-text">{{ type }}</span>
+          </label>
         </div>
-      </div>
-      <div class="graph-area">
-        <app-graph-view #graphView></app-graph-view>
+        <div class="graph-area">
+          <app-graph-view #graphView></app-graph-view>
+        </div>
       </div>
     </div>

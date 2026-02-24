@@ -18,10 +18,10 @@ jobs:
         with:
           node-version: 20
       - run: npm ci
-      - run: npx nx build example-ng --base-href=/canvas-graph/
+      - run: npx nx build example-core --base-href=/canvas-graph/
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: dist/apps/example-ng/browser
+          path: dist/apps/example-core/browser
   
   deploy:
     needs: build
