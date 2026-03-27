@@ -64,7 +64,10 @@ export class ThreeRenderer<TConfig extends GraphConfig> extends Renderer<TConfig
 
   setData<TData>(chunk: DataChunk<TData>): void {
       if (!chunk) return;
+      console.time('ThreeRenderer: setData');
+      console.log(`[ThreeRenderer] setData called - start: ${chunk.start}, end: ${chunk.end}`);
       this.dataLayer.setData(chunk, chunk.start, chunk.end);
+      console.timeEnd('ThreeRenderer: setData');
       this.render();
   }
 
@@ -74,6 +77,7 @@ export class ThreeRenderer<TConfig extends GraphConfig> extends Renderer<TConfig
   }
 
   render(): void {
+      console.time('ThreeRenderer: render');
       // Get latest state
       const range = this.range$.getValue();
       
@@ -85,6 +89,7 @@ export class ThreeRenderer<TConfig extends GraphConfig> extends Renderer<TConfig
       this.markers.update(range, this.width, this.height, this.camera);
       
       this.renderer.render(this.scene, this.camera);
+      console.timeEnd('ThreeRenderer: render');
   }
   
   destroy(): void {
